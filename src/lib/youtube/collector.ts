@@ -15,11 +15,32 @@ export async function fetchChannelVideos(
   apiKey: string,
   maxResults = 50
 ): Promise<VideoInfo[]> {
-  const channelRes = await fetch(
-    `${YOUTUBE_API_BASE}/channels?part=id,contentDetails&forHandle=syukaworld&key=${apiKey}`
-  );
-  const channelData = await channelRes.json();
-  if (!channelData.items?.length) throw new Error("Channel not found");
+  // Try @handle format first, then without @
+  let channelData;
+  for (const handle of ["@syukaworld", "syukaworld"]) {
+    const res = await fetch(
+      `${YOUTUBE_API_BASE}/channels?part=id,contentDetails&forHandle=${handle}&key=${apiKey}`
+    );
+    channelData = await res.json();
+    if (channelData.items?.length) break;
+  }
+
+  // Fallback: search by channel name
+  if (!channelData?.items?.length) {
+    const searchRes = await fetch(
+      `${YOUTUBE_API_BASE}/search?part=snippet&type=channel&q=슈카월드&maxResults=1&key=${apiKey}`
+    );
+    const searchData = await searchRes.json();
+    if (searchData.items?.length) {
+      const channelId = searchData.items[0].snippet.channelId;
+      const res = await fetch(
+        `${YOUTUBE_API_BASE}/channels?part=id,contentDetails&id=${channelId}&key=${apiKey}`
+      );
+      channelData = await res.json();
+    }
+  }
+
+  if (!channelData?.items?.length) throw new Error(`Channel not found. API response: ${JSON.stringify(channelData)}`);
 
   const uploadsPlaylistId =
     channelData.items[0].contentDetails.relatedPlaylists.uploads;
