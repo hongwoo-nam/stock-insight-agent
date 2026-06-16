@@ -20,7 +20,8 @@ type Status = "idle" | "running" | "done" | "error";
 
 export default function CollectPage() {
   const [mode, setMode] = useState<Mode>("stock");
-  const [keywords, setKeywords] = useState(DEFAULT_KEYWORDS.join("\n"));
+  const [keywordList, setKeywordList] = useState<string[]>(DEFAULT_KEYWORDS);
+  const [newKeyword, setNewKeyword] = useState("");
   const [channels, setChannels] = useState(DEFAULT_CHANNELS.map(c => `${c.handle} ${c.name}`).join("\n"));
   const [status, setStatus] = useState<Status>("idle");
   const [logs, setLogs] = useState<string[]>([]);
@@ -40,7 +41,7 @@ export default function CollectPage() {
 
     const body: Record<string, unknown> = { mode };
     if (mode === "stock") {
-      body.keywords = keywords.split("\n").map(s => s.trim()).filter(Boolean);
+      body.keywords = keywordList;
     } else {
       body.channels = channels.split("\n").map(s => s.trim()).filter(Boolean).map(line => {
         const [handle, ...nameParts] = line.split(" ");
@@ -139,16 +140,81 @@ export default function CollectPage() {
 
           {mode === "stock" ? (
             <div>
-              <p className="text-xs text-gray-500 mb-2">한 줄에 하나씩 입력하세요. 최근 1주일 내 영상만 수집됩니다.</p>
-              <textarea
-                value={keywords}
-                onChange={e => setKeywords(e.target.value)}
-                disabled={status === "running"}
-                rows={7}
-                className="w-full px-4 py-3 border border-gray-200 rounded-lg text-sm font-mono focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none disabled:bg-gray-50"
-              />
-              <p className="text-xs text-gray-400 mt-1">
-                {keywords.split("\n").filter(Boolean).length}개 키워드 입력됨
+              <p className="text-xs text-gray-500 mb-3">최근 1주일 내 YouTube 영상을 검색합니다. 키워드를 추가하거나 삭제하세요.</p>
+
+              {/* 키워드 태그 목록 */}
+              <div className="flex flex-wrap gap-2 mb-3 min-h-[40px] p-3 border border-gray-200 rounded-xl bg-gray-50">
+                {keywordList.map((kw, i) => (
+                  <span
+                    key={i}
+                    className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm font-medium ${
+                      i < DEFAULT_KEYWORDS.length
+                        ? "bg-blue-100 text-blue-800"
+                        : "bg-green-100 text-green-800"
+                    }`}
+                  >
+                    {kw}
+                    <button
+                      onClick={() => setKeywordList(p => p.filter((_, j) => j !== i))}
+                      disabled={status === "running"}
+                      className="hover:opacity-60 transition-opacity disabled:opacity-30 ml-0.5"
+                      title="삭제"
+                    >
+                      <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M6 18L18 6M6 6l12 12" />
+                      </svg>
+                    </button>
+                  </span>
+                ))}
+                {keywordList.length === 0 && (
+                  <span className="text-xs text-gray-400 self-center">키워드가 없습니다. 아래에서 추가하세요.</span>
+                )}
+              </div>
+
+              {/* 키워드 추가 입력 */}
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  value={newKeyword}
+                  onChange={e => setNewKeyword(e.target.value)}
+                  onKeyDown={e => {
+                    if (e.key === "Enter" && newKeyword.trim()) {
+                      e.preventDefault();
+                      const kw = newKeyword.trim();
+                      if (!keywordList.includes(kw)) setKeywordList(p => [...p, kw]);
+                      setNewKeyword("");
+                    }
+                  }}
+                  disabled={status === "running"}
+                  placeholder="종목명 입력 후 Enter (예: 카카오 주식)"
+                  className="flex-1 px-4 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-gray-50"
+                />
+                <button
+                  onClick={() => {
+                    const kw = newKeyword.trim();
+                    if (kw && !keywordList.includes(kw)) setKeywordList(p => [...p, kw]);
+                    setNewKeyword("");
+                  }}
+                  disabled={status === "running" || !newKeyword.trim()}
+                  className="px-4 py-2.5 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-200 disabled:text-gray-400 text-white rounded-xl text-sm font-medium transition-colors"
+                >
+                  추가
+                </button>
+                <button
+                  onClick={() => setKeywordList(DEFAULT_KEYWORDS)}
+                  disabled={status === "running"}
+                  className="px-4 py-2.5 bg-gray-100 hover:bg-gray-200 text-gray-600 rounded-xl text-sm transition-colors disabled:opacity-50"
+                  title="기본값으로 초기화"
+                >
+                  초기화
+                </button>
+              </div>
+              <p className="text-xs text-gray-400 mt-2">
+                총 <span className="font-medium text-gray-600">{keywordList.length}개</span> 키워드 ·
+                <span className="text-blue-600"> 기본 {Math.min(keywordList.length, DEFAULT_KEYWORDS.length)}개</span>
+                {keywordList.length > DEFAULT_KEYWORDS.length && (
+                  <span className="text-green-600"> + 추가 {keywordList.length - DEFAULT_KEYWORDS.length}개</span>
+                )}
               </p>
             </div>
           ) : (
