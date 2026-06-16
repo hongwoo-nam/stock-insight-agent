@@ -7,18 +7,15 @@ export interface VideoInfo {
   url: string;
   published_at: string;
   duration: number;
+  channel_name?: string;
 }
 
-async function getChannelId(): Promise<string> {
-  // Fetch channel page and extract channel ID from HTML
-  const res = await fetch("https://www.youtube.com/@syukaworld", {
-    headers: { "User-Agent": "Mozilla/5.0 (compatible; Googlebot/2.1)" },
-  });
-  const html = await res.text();
-  const match = html.match(/"channelId":"(UC[^"]+)"/);
-  if (!match) throw new Error("Could not extract channel ID from YouTube page");
-  return match[1];
-}
+// 수집 대상 채널 목록
+export const TARGET_CHANNELS = [
+  { handle: "@syukaworld", name: "슈카월드" },
+  { handle: "@한국경제TV", name: "한국경제TV" },
+  { handle: "@kvnews", name: "한국경제TV(kvnews)" },
+];
 
 function decodeHtml(str: string): string {
   return str
@@ -29,48 +26,68 @@ function decodeHtml(str: string): string {
     .replace(/&#39;/g, "'");
 }
 
-export async function fetchChannelVideos(
-  _apiKey: string,
-  maxResults = 50
+async function getChannelIdFromHandle(handle: string): Promise<string | null> {
+  try {
+    const res = await fetch(`https://www.youtube.com/${handle}`, {
+      headers: { "User-Agent": "Mozilla/5.0 (compatible; Googlebot/2.1)" },
+    });
+    const html = await res.text();
+    const match = html.match(/"channelId":"(UC[^"]+)"/);
+    return match?.[1] ?? null;
+  } catch {
+    return null;
+  }
+}
+
+async function fetchVideosFromChannel(
+  handle: string,
+  channelName: string,
+  maxResults: number
 ): Promise<VideoInfo[]> {
-  const channelId = await getChannelId();
+  const channelId = await getChannelIdFromHandle(handle);
+  if (!channelId) return [];
+
   const videos: VideoInfo[] = [];
   const seen = new Set<string>();
 
-  // RSS feed — latest 15 videos, no API key required
-  const rssUrl = `https://www.youtube.com/feeds/videos.xml?channel_id=${channelId}`;
-  const rssRes = await fetch(rssUrl, {
-    headers: { "User-Agent": "Mozilla/5.0 (compatible; Googlebot/2.1)" },
-  });
-  const rssText = await rssRes.text();
-  const entries = [...rssText.matchAll(/<entry>([\s\S]*?)<\/entry>/g)];
-
-  for (const entry of entries) {
-    const content = entry[1];
-    const videoIdMatch = content.match(/<yt:videoId>([^<]+)<\/yt:videoId>/);
-    const titleMatch = content.match(/<title>([^<]+)<\/title>/);
-    const publishedMatch = content.match(/<published>([^<]+)<\/published>/);
-    if (!videoIdMatch || !titleMatch) continue;
-    const videoId = videoIdMatch[1];
-    if (seen.has(videoId)) continue;
-    seen.add(videoId);
-    videos.push({
-      video_id: videoId,
-      title: decodeHtml(titleMatch[1]),
-      url: `https://www.youtube.com/watch?v=${videoId}`,
-      published_at: publishedMatch?.[1] || new Date().toISOString(),
-      duration: 0,
+  // RSS feed (최신 15개)
+  try {
+    const rssUrl = `https://www.youtube.com/feeds/videos.xml?channel_id=${channelId}`;
+    const rssRes = await fetch(rssUrl, {
+      headers: { "User-Agent": "Mozilla/5.0 (compatible; Googlebot/2.1)" },
     });
+    const rssText = await rssRes.text();
+    const entries = [...rssText.matchAll(/<entry>([\s\S]*?)<\/entry>/g)];
+
+    for (const entry of entries) {
+      const content = entry[1];
+      const videoIdMatch = content.match(/<yt:videoId>([^<]+)<\/yt:videoId>/);
+      const titleMatch = content.match(/<title>([^<]+)<\/title>/);
+      const publishedMatch = content.match(/<published>([^<]+)<\/published>/);
+      if (!videoIdMatch || !titleMatch) continue;
+      const videoId = videoIdMatch[1];
+      if (seen.has(videoId)) continue;
+      seen.add(videoId);
+      videos.push({
+        video_id: videoId,
+        title: decodeHtml(titleMatch[1]),
+        url: `https://www.youtube.com/watch?v=${videoId}`,
+        published_at: publishedMatch?.[1] || new Date().toISOString(),
+        duration: 0,
+        channel_name: channelName,
+      });
+    }
+  } catch {
+    // RSS 실패 시 계속
   }
 
-  // If more videos needed, scrape channel page for additional IDs
+  // 채널 페이지 스크래핑 (추가 영상)
   if (videos.length < maxResults) {
     try {
-      const pageRes = await fetch(`https://www.youtube.com/@syukaworld/videos`, {
+      const pageRes = await fetch(`https://www.youtube.com/${handle}/videos`, {
         headers: { "User-Agent": "Mozilla/5.0 (compatible; Googlebot/2.1)" },
       });
       const pageHtml = await pageRes.text();
-      // Extract video IDs from page JSON data
       const idMatches = [...pageHtml.matchAll(/"videoId":"([a-zA-Z0-9_-]{11})"/g)];
       const titleMatches = [...pageHtml.matchAll(/"title":{"runs":\[{"text":"([^"]+)"/g)];
 
@@ -85,15 +102,39 @@ export async function fetchChannelVideos(
           url: `https://www.youtube.com/watch?v=${videoId}`,
           published_at: new Date().toISOString(),
           duration: 0,
+          channel_name: channelName,
         });
       }
     } catch {
-      // Channel page scraping failed — use RSS results only
+      // 스크래핑 실패 시 RSS 결과만 사용
     }
   }
 
-  if (!videos.length) throw new Error("No videos found");
   return videos.slice(0, maxResults);
+}
+
+export async function fetchChannelVideos(
+  _apiKey: string,
+  maxPerChannel = 30
+): Promise<VideoInfo[]> {
+  const allVideos: VideoInfo[] = [];
+  const seenHandles = new Set<string>();
+
+  for (const channel of TARGET_CHANNELS) {
+    // 같은 채널 중복 방지 (kvnews와 한국경제TV 같은 경우)
+    const videos = await fetchVideosFromChannel(channel.handle, channel.name, maxPerChannel);
+    if (!videos.length) continue;
+
+    for (const v of videos) {
+      if (!seenHandles.has(v.video_id)) {
+        seenHandles.add(v.video_id);
+        allVideos.push(v);
+      }
+    }
+  }
+
+  if (!allVideos.length) throw new Error("No videos found from any channel");
+  return allVideos;
 }
 
 export async function getNewVideoIds(videoIds: string[]): Promise<string[]> {
@@ -136,9 +177,8 @@ export function chunkTranscript(
   let currentTokens = 0;
 
   for (const seg of segments) {
-    const tokens = estimateTokens(seg.text);
     currentChunk.push(seg);
-    currentTokens += tokens;
+    currentTokens += estimateTokens(seg.text);
 
     if (currentTokens >= chunkTokens) {
       chunks.push({
@@ -185,13 +225,7 @@ export async function saveVideo(video: VideoInfo): Promise<void> {
   );
 }
 
-export async function updateVideoStatus(
-  videoId: string,
-  status: string
-): Promise<void> {
+export async function updateVideoStatus(videoId: string, status: string): Promise<void> {
   const supabase = getSupabase();
-  await supabase
-    .from("videos")
-    .update({ transcript_status: status })
-    .eq("video_id", videoId);
+  await supabase.from("videos").update({ transcript_status: status }).eq("video_id", videoId);
 }
