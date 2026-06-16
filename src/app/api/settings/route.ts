@@ -40,7 +40,8 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({ success: true });
   } catch (err) {
-    console.error("Settings POST error:", err);
-    return NextResponse.json({ error: "Failed to save settings" }, { status: 500 });
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error("Settings POST error:", msg);
+    return NextResponse.json({ error: msg }, { status: 500 });
   }
 }
