@@ -1,6 +1,5 @@
 import { getSupabase } from "@/lib/db/client";
-import { fetchTranscript as fetchTranscriptDirect } from "./transcript";
-export type { TranscriptSegment } from "./transcript";
+import { fetchTranscript as fetchTranscriptDirect, type TranscriptSegment } from "./transcript";
 
 export interface VideoInfo {
   video_id: string;
@@ -150,8 +149,7 @@ export async function getNewVideoIds(videoIds: string[]): Promise<string[]> {
 }
 
 export const fetchTranscript = fetchTranscriptDirect;
-
-export type { TranscriptSegment };
+export type { TranscriptSegment } from "./transcript";
 
 export function chunkTranscript(
   segments: TranscriptSegment[],
