@@ -1,9 +1,8 @@
 import { SignJWT, jwtVerify } from "jose";
 import { cookies } from "next/headers";
 
-const SECRET = new TextEncoder().encode(
-  process.env.JWT_SECRET || "stock-insight-super-secret-jwt-key-2026"
-);
+if (!process.env.JWT_SECRET) throw new Error("JWT_SECRET environment variable is required");
+const SECRET = new TextEncoder().encode(process.env.JWT_SECRET);
 const COOKIE = "sia_session";
 
 export interface SessionPayload {

@@ -1,13 +1,15 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { runCollector } from "@/lib/agents/collector";
+import { requireAdmin, isNextResponse } from "@/lib/auth/guard";
 
-export async function POST() {
+export async function POST(req: NextRequest) {
+  const auth = await requireAdmin(req);
+  if (isNextResponse(auth)) return auth;
+
   try {
     const result = await runCollector();
     return NextResponse.json(result);
-  } catch (err) {
-    console.error("Collector error:", err);
-    const msg = err instanceof Error ? err.message : "Unknown error";
-    return NextResponse.json({ error: msg }, { status: 500 });
+  } catch {
+    return NextResponse.json({ error: "Collector failed" }, { status: 500 });
   }
 }

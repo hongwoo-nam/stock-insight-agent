@@ -1,7 +1,11 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { getSupabase } from "@/lib/db/client";
+import { requireAuth, isNextResponse } from "@/lib/auth/guard";
 
-export async function GET() {
+export async function GET(req: NextRequest) {
+  const auth = await requireAuth(req);
+  if (isNextResponse(auth)) return auth;
+
   try {
     const supabase = getSupabase();
 
@@ -32,8 +36,7 @@ export async function GET() {
         total_chunks: String(totalChunks || 0),
       },
     });
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    return NextResponse.json({ error: msg }, { status: 500 });
+  } catch {
+    return NextResponse.json({ error: "Failed to fetch status" }, { status: 500 });
   }
 }

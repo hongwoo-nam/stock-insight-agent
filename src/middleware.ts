@@ -13,13 +13,20 @@ export async function middleware(req: NextRequest) {
   const token = req.cookies.get(COOKIE)?.value;
   const session = token ? await verifySession(token) : null;
 
-  // 미로그인 → 로그인 페이지
+  // 미로그인
   if (!session) {
+    // API 요청은 401 JSON 반환
+    if (pathname.startsWith("/api/")) {
+      return NextResponse.json({ error: "인증이 필요합니다." }, { status: 401 });
+    }
     return NextResponse.redirect(new URL("/login", req.url));
   }
 
   // 관리자 전용 경로
   if (pathname.startsWith("/admin") && session.role !== "ADMIN") {
+    if (pathname.startsWith("/api/")) {
+      return NextResponse.json({ error: "관리자 권한이 필요합니다." }, { status: 403 });
+    }
     return NextResponse.redirect(new URL("/", req.url));
   }
 
