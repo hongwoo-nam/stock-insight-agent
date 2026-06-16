@@ -25,11 +25,17 @@ export default function AdminPage() {
     default_voice: "male",
     collection_schedule: "0 18 * * *",
   });
+  const [savedKeys, setSavedKeys] = useState<Record<string, string>>({});
 
   useEffect(() => {
     fetch("/api/settings")
       .then((r) => r.json())
       .then((d) => {
+        setSavedKeys({
+          openai_api_key: d.openai_api_key || "",
+          elevenlabs_api_key: d.elevenlabs_api_key || "",
+          youtube_api_key: d.youtube_api_key || "",
+        });
         setForm((prev) => ({
           ...prev,
           male_voice_id: d.male_voice_id || "",
@@ -114,12 +120,20 @@ export default function AdminPage() {
               { key: "youtube_api_key", label: "YouTube Data API v3 Key", placeholder: "AIza..." },
             ].map((field) => (
               <div key={field.key}>
-                <label className="block text-sm font-medium text-gray-700 mb-1.5">
-                  {field.label}
-                </label>
+                <div className="flex items-center justify-between mb-1.5">
+                  <label className="block text-sm font-medium text-gray-700">
+                    {field.label}
+                  </label>
+                  {savedKeys[field.key] && (
+                    <span className="text-xs text-green-600 font-medium flex items-center gap-1">
+                      <span>✓ 저장됨</span>
+                      <span className="text-gray-400 font-mono">{savedKeys[field.key]}</span>
+                    </span>
+                  )}
+                </div>
                 <Input
                   type="password"
-                  placeholder={field.placeholder}
+                  placeholder={savedKeys[field.key] ? "변경하려면 새 값을 입력하세요" : field.placeholder}
                   value={form[field.key as keyof typeof form]}
                   onChange={(e) => setForm((prev) => ({ ...prev, [field.key]: e.target.value }))}
                 />
