@@ -1,8 +1,12 @@
 #!/usr/bin/env node
 /**
- * 로컬 수집 스크립트 — YouTube 자막 수집 후 Supabase에 직접 저장
- * 실행: node scripts/collect.mjs
- * 필요: .env.local 에 SUPABASE_URL, SUPABASE_ANON_KEY, OPENAI_API_KEY 설정
+ * 로컬 수집 스크립트
+ * - 모드 1 (기본): 슈카월드 & 한국경제TV 채널 최신 영상 수집
+ * - 모드 2 (--stock): 종목 키워드로 최근 1주일 YouTube 검색 수집
+ *
+ * 실행:
+ *   node scripts/collect.mjs              # 채널 수집
+ *   node scripts/collect.mjs --stock      # 종목 키워드 검색 수집
  */
 
 import { createClient } from "@supabase/supabase-js";
@@ -14,7 +18,6 @@ import { dirname, join } from "path";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
-// Load .env.local
 function loadEnv() {
   try {
     const envFile = readFileSync(join(__dirname, "../.env.local"), "utf-8");
@@ -40,21 +43,103 @@ if (!SUPABASE_URL || !SUPABASE_ANON_KEY || !OPENAI_API_KEY) {
 const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 const openai = new OpenAI({ apiKey: OPENAI_API_KEY });
 
+const HEADERS = {
+  "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0.0.0 Safari/537.36",
+  "Accept-Language": "ko-KR,ko;q=0.9",
+};
+
+// ── 종목 키워드 목록 ──────────────────────────────────────────
+const STOCK_KEYWORDS = [
+  { keyword: "HLB 주식", tag: "HLB" },
+  { keyword: "삼성전자 주식", tag: "삼성전자" },
+  { keyword: "SK하이닉스 주식", tag: "하이닉스" },
+  { keyword: "셀트리온 주식", tag: "셀트리온" },
+  { keyword: "네이버 주식", tag: "네이버" },
+];
+
+// ── 채널 목록 ─────────────────────────────────────────────────
 const TARGET_CHANNELS = [
   { handle: "@syukaworld", name: "슈카월드" },
   { handle: "@kvnews", name: "한국경제TV" },
 ];
 
+// ─────────────────────────────────────────────────────────────
+// YouTube 검색 결과 스크래핑 (API 키 불필요)
+// sp=EgQIAxAB → "이번 주" 필터
+// ─────────────────────────────────────────────────────────────
+async function searchYouTube(keyword, maxResults = 15) {
+  const url = `https://www.youtube.com/results?search_query=${encodeURIComponent(keyword)}&sp=EgQIAxAB`;
+  const res = await fetch(url, { headers: HEADERS });
+  const html = await res.text();
+
+  // ytInitialData JSON 추출
+  const match = html.match(/var ytInitialData = ({.+?});<\/script>/s);
+  if (!match) return [];
+
+  let data;
+  try { data = JSON.parse(match[1]); } catch { return []; }
+
+  const videos = [];
+  const seen = new Set();
+
+  function walk(obj) {
+    if (!obj || typeof obj !== "object") return;
+    if (Array.isArray(obj)) { obj.forEach(walk); return; }
+
+    if (obj.videoRenderer) {
+      const vr = obj.videoRenderer;
+      const videoId = vr.videoId;
+      if (!videoId || seen.has(videoId)) return;
+      seen.add(videoId);
+
+      const title = vr.title?.runs?.[0]?.text || `영상 ${videoId}`;
+      const channelName = vr.ownerText?.runs?.[0]?.text || "unknown";
+      const publishedText = vr.publishedTimeText?.simpleText || "";
+
+      // 1주일 이내 필터 (초, 분, 시간, 일, 주 단위 텍스트 파싱)
+      if (!isWithinOneWeek(publishedText)) return;
+
+      videos.push({
+        video_id: videoId,
+        title,
+        url: `https://www.youtube.com/watch?v=${videoId}`,
+        published_at: new Date().toISOString(),
+        duration: 0,
+        channel_name: channelName,
+      });
+      return;
+    }
+
+    Object.values(obj).forEach(walk);
+  }
+
+  walk(data);
+  return videos.slice(0, maxResults);
+}
+
+function isWithinOneWeek(text) {
+  if (!text) return false;
+  // 한국어/영어 모두 처리
+  if (/초 전|second/i.test(text)) return true;
+  if (/분 전|minute/i.test(text)) return true;
+  if (/시간 전|hour/i.test(text)) return true;
+  const dayMatch = text.match(/(\d+)\s*(일 전|day)/i);
+  if (dayMatch && parseInt(dayMatch[1]) <= 7) return true;
+  if (/1주 전|1 week/i.test(text)) return true;
+  return false;
+}
+
+// ─────────────────────────────────────────────────────────────
+// 채널 RSS 수집
+// ─────────────────────────────────────────────────────────────
 async function getChannelId(handle) {
-  const res = await fetch(`https://www.youtube.com/${handle}`, {
-    headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36" },
-  });
+  const res = await fetch(`https://www.youtube.com/${handle}`, { headers: HEADERS });
   const html = await res.text();
   const match = html.match(/"channelId":"(UC[^"]+)"/);
   return match?.[1] ?? null;
 }
 
-async function fetchChannelVideoIds(handle, maxResults = 30) {
+async function fetchChannelVideoIds(handle, channelName, maxResults = 30) {
   const channelId = await getChannelId(handle);
   if (!channelId) return [];
 
@@ -77,12 +162,15 @@ async function fetchChannelVideoIds(handle, maxResults = 30) {
       url: `https://www.youtube.com/watch?v=${idMatch[1]}`,
       published_at: publishedMatch?.[1] || new Date().toISOString(),
       duration: 0,
-      channel_name: handle,
+      channel_name: channelName,
     });
   }
   return videos;
 }
 
+// ─────────────────────────────────────────────────────────────
+// 자막 수집 → 청크 → 임베딩 → Supabase 저장
+// ─────────────────────────────────────────────────────────────
 function chunkTranscript(segments, chunkTokens = 1000, overlapTokens = 150) {
   const chunks = [];
   const est = (t) => Math.ceil(t.length / 2);
@@ -114,7 +202,6 @@ async function createEmbeddingsBatch(texts) {
 }
 
 async function processVideo(video) {
-  // Get transcript
   let segments;
   try {
     const raw = await YoutubeTranscript.fetchTranscript(video.video_id, { lang: "ko" }).catch(() =>
@@ -127,14 +214,12 @@ async function processVideo(video) {
 
   if (!segments.length) return { status: "no_transcript" };
 
-  // Save video
   await supabase.from("videos").upsert({
     video_id: video.video_id, title: video.title, url: video.url,
     published_at: video.published_at, duration: video.duration,
     channel_name: video.channel_name, transcript_status: "processing",
   }, { onConflict: "video_id" });
 
-  // Chunk + embed
   const chunks = chunkTranscript(segments);
   const BATCH = 20;
   for (let i = 0; i < chunks.length; i += BATCH) {
@@ -152,50 +237,25 @@ async function processVideo(video) {
   return { status: "done", chunks: chunks.length };
 }
 
-async function main() {
-  console.log("🚀 슈카월드 & 한국경제TV 수집 시작\n");
-
-  // Collect video list from all channels
-  const allVideos = [];
-  const seen = new Set();
-  for (const ch of TARGET_CHANNELS) {
-    console.log(`📡 ${ch.name} 채널 영상 목록 수집 중...`);
-    const videos = await fetchChannelVideoIds(ch.handle, 30);
-    console.log(`   → ${videos.length}개 발견`);
-    for (const v of videos) {
-      if (!seen.has(v.video_id)) { seen.add(v.video_id); allVideos.push({ ...v, channel_name: ch.name }); }
-    }
-  }
-
-  // Find new + no_transcript videos
+async function processVideos(videos, label) {
   const { data: existing } = await supabase.from("videos")
     .select("video_id, transcript_status")
-    .in("video_id", allVideos.map(v => v.video_id));
-
+    .in("video_id", videos.map(v => v.video_id));
   const existingMap = Object.fromEntries((existing || []).map(r => [r.video_id, r.transcript_status]));
-  const toProcess = allVideos.filter(v => !existingMap[v.video_id] || existingMap[v.video_id] === "no_transcript");
+  const toProcess = videos.filter(v => !existingMap[v.video_id] || existingMap[v.video_id] === "no_transcript");
 
-  // Also retry existing no_transcript videos from DB
-  const { data: retryVideos } = await supabase.from("videos")
-    .select("*").eq("transcript_status", "no_transcript").limit(50);
-  for (const v of retryVideos || []) {
-    if (!seen.has(v.video_id)) { seen.add(v.video_id); toProcess.push(v); }
-  }
-
-  console.log(`\n📋 처리할 영상: ${toProcess.length}개 (신규 + no_transcript 재시도)\n`);
+  if (!toProcess.length) { console.log(`   → 신규 영상 없음\n`); return { done: 0, noTranscript: 0, failed: 0 }; }
+  console.log(`   → ${toProcess.length}개 처리 예정\n`);
 
   let done = 0, noTranscript = 0, failed = 0;
-
   for (let i = 0; i < toProcess.length; i++) {
     const video = toProcess[i];
-    process.stdout.write(`[${i + 1}/${toProcess.length}] ${video.title?.slice(0, 40)}... `);
+    process.stdout.write(`  [${i + 1}/${toProcess.length}] ${video.title?.slice(0, 45)}... `);
     try {
       const result = await processVideo(video);
-      if (result.status === "done") {
-        console.log(`✓ (${result.chunks}개 청크)`);
-        done++;
-      } else {
-        console.log(`⚠ 자막 없음`);
+      if (result.status === "done") { console.log(`✓ (${result.chunks}청크)`); done++; }
+      else {
+        console.log(`⚠ 자막없음`);
         await supabase.from("videos").upsert({
           video_id: video.video_id, title: video.title, url: video.url,
           published_at: video.published_at, duration: video.duration || 0,
@@ -203,15 +263,69 @@ async function main() {
         }, { onConflict: "video_id" });
         noTranscript++;
       }
-    } catch (e) {
-      console.log(`✗ 오류: ${e.message?.slice(0, 60)}`);
-      failed++;
+    } catch (e) { console.log(`✗ ${e.message?.slice(0, 50)}`); failed++; }
+    await new Promise(r => setTimeout(r, 600));
+  }
+  return { done, noTranscript, failed };
+}
+
+// ─────────────────────────────────────────────────────────────
+// 메인
+// ─────────────────────────────────────────────────────────────
+async function main() {
+  const stockMode = process.argv.includes("--stock");
+
+  if (stockMode) {
+    console.log("🔍 종목 키워드 검색 수집 모드 (최근 1주일)\n");
+    let totalDone = 0, totalNoTranscript = 0, totalFailed = 0;
+
+    for (const { keyword, tag } of STOCK_KEYWORDS) {
+      console.log(`📌 [${tag}] "${keyword}" 검색 중...`);
+      const videos = await searchYouTube(keyword, 15);
+      console.log(`   → ${videos.length}개 영상 발견`);
+
+      if (!videos.length) { console.log(); continue; }
+      videos.forEach(v => console.log(`     • ${v.channel_name} | ${v.title?.slice(0, 50)}`));
+      console.log();
+
+      const stats = await processVideos(videos, tag);
+      totalDone += stats.done;
+      totalNoTranscript += stats.noTranscript;
+      totalFailed += stats.failed;
+
+      await new Promise(r => setTimeout(r, 1000));
     }
-    // Rate limiting
-    await new Promise(r => setTimeout(r, 500));
+
+    console.log(`\n✅ 종목 수집 완료: ${totalDone}개 처리, ${totalNoTranscript}개 자막없음, ${totalFailed}개 실패`);
+
+  } else {
+    console.log("🚀 슈카월드 & 한국경제TV 채널 수집 시작\n");
+    const allVideos = [];
+    const seen = new Set();
+
+    for (const ch of TARGET_CHANNELS) {
+      console.log(`📡 ${ch.name} 채널 영상 목록 수집 중...`);
+      const videos = await fetchChannelVideoIds(ch.handle, ch.name, 30);
+      console.log(`   → ${videos.length}개 발견`);
+      for (const v of videos) {
+        if (!seen.has(v.video_id)) { seen.add(v.video_id); allVideos.push(v); }
+      }
+    }
+
+    // 기존 no_transcript 재시도
+    const { data: retryVideos } = await supabase.from("videos")
+      .select("*").eq("transcript_status", "no_transcript").limit(50);
+    for (const v of retryVideos || []) {
+      if (!seen.has(v.video_id)) { seen.add(v.video_id); allVideos.push(v); }
+    }
+
+    console.log();
+    const stats = await processVideos(allVideos, "채널");
+    console.log(`\n✅ 완료: ${stats.done}개 처리, ${stats.noTranscript}개 자막없음, ${stats.failed}개 실패`);
   }
 
-  console.log(`\n✅ 완료: ${done}개 처리, ${noTranscript}개 자막없음, ${failed}개 실패`);
+  const { count } = await supabase.from("transcript_chunks").select("*", { count: "exact", head: true });
+  console.log(`📊 총 저장 청크 수: ${count}`);
 }
 
 main().catch(e => { console.error("Fatal:", e.message); process.exit(1); });
