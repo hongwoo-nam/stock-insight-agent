@@ -8,6 +8,7 @@ import { Input } from "@/components/ui/input";
 
 export default function AdminPage() {
   const [saved, setSaved] = useState(false);
+  const [saveError, setSaveError] = useState("");
   const [loading, setLoading] = useState(false);
   const [cloning, setCloning] = useState(false);
   const [cloneConsent, setCloneConsent] = useState(false);
@@ -42,19 +43,26 @@ export default function AdminPage() {
 
   const handleSave = async () => {
     setLoading(true);
+    setSaveError("");
     try {
       const payload: Record<string, string> = {};
       for (const [key, value] of Object.entries(form)) {
         if (value) payload[key] = value;
       }
-      await fetch("/api/settings", {
+      const res = await fetch("/api/settings", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
       });
-      setSaved(true);
-      setTimeout(() => setSaved(false), 3000);
+      const data = await res.json();
+      if (!res.ok) {
+        setSaveError(data.error || "저장 실패");
+      } else {
+        setSaved(true);
+        setTimeout(() => setSaved(false), 3000);
+      }
     } catch (err) {
+      setSaveError("네트워크 오류가 발생했습니다.");
       console.error(err);
     } finally {
       setLoading(false);
@@ -179,9 +187,20 @@ export default function AdminPage() {
           </CardContent>
         </Card>
 
-        <Button onClick={handleSave} disabled={loading} size="lg" className="w-full mb-8">
+        <Button onClick={handleSave} disabled={loading} size="lg" className="w-full mb-3">
           {saved ? "✓ 저장 완료" : loading ? "저장 중..." : "설정 저장"}
         </Button>
+
+        {saveError && (
+          <div className="mb-5 px-4 py-3 rounded-lg bg-red-50 border border-red-200 text-sm text-red-700">
+            ⚠️ {saveError}
+          </div>
+        )}
+        {saved && (
+          <div className="mb-5 px-4 py-3 rounded-lg bg-green-50 border border-green-200 text-sm text-green-700">
+            ✓ 설정이 성공적으로 저장되었습니다.
+          </div>
+        )}
 
         {/* Voice Cloning */}
         <Card className="border-orange-100">
