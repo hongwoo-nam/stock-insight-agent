@@ -15,7 +15,7 @@ interface UsageStat {
 
 interface UsageData {
   openai: { total: UsageStat; today: UsageStat } | null;
-  claude: { total: UsageStat; today: UsageStat } | null;
+  claude: { total: UsageStat; today: UsageStat; last_synced?: string } | null;
 }
 
 function fmt(n: number) {
@@ -85,31 +85,11 @@ export function UsageCard() {
           </div>
           {data.openai ? (
             <div className="pl-3.5">
-              <StatRow
-                label="비용"
-                today={fmtCost(data.openai.today.cost_usd)}
-                total={fmtCost(data.openai.total.cost_usd)}
-              />
-              <StatRow
-                label="입력 토큰"
-                today={fmt(data.openai.today.input_tokens)}
-                total={fmt(data.openai.total.input_tokens)}
-              />
-              <StatRow
-                label="출력 토큰"
-                today={fmt(data.openai.today.output_tokens)}
-                total={fmt(data.openai.total.output_tokens)}
-              />
-              <StatRow
-                label="채팅 호출"
-                today={String(data.openai.today.chat_calls ?? 0)}
-                total={String(data.openai.total.chat_calls ?? 0)}
-              />
-              <StatRow
-                label="임베딩 호출"
-                today={String(data.openai.today.embedding_calls ?? 0)}
-                total={String(data.openai.total.embedding_calls ?? 0)}
-              />
+              <StatRow label="비용" today={fmtCost(data.openai.today.cost_usd)} total={fmtCost(data.openai.total.cost_usd)} />
+              <StatRow label="입력 토큰" today={fmt(data.openai.today.input_tokens)} total={fmt(data.openai.total.input_tokens)} />
+              <StatRow label="출력 토큰" today={fmt(data.openai.today.output_tokens)} total={fmt(data.openai.total.output_tokens)} />
+              <StatRow label="채팅 호출" today={String(data.openai.today.chat_calls ?? 0)} total={String(data.openai.total.chat_calls ?? 0)} />
+              <StatRow label="임베딩 호출" today={String(data.openai.today.embedding_calls ?? 0)} total={String(data.openai.total.embedding_calls ?? 0)} />
             </div>
           ) : (
             <p className="text-xs text-gray-400 pl-3.5">데이터 없음</p>
@@ -118,35 +98,29 @@ export function UsageCard() {
 
         {/* Claude Code */}
         <div>
-          <div className="flex items-center gap-1.5 mb-2">
-            <div className="w-2 h-2 rounded-full bg-orange-500" />
-            <span className="text-xs font-semibold text-gray-700">Claude Code (개발)</span>
+          <div className="flex items-center justify-between mb-2">
+            <div className="flex items-center gap-1.5">
+              <div className="w-2 h-2 rounded-full bg-orange-500" />
+              <span className="text-xs font-semibold text-gray-700">Claude Code (개발)</span>
+            </div>
+            {data.claude?.last_synced && (
+              <span className="text-xs text-gray-400">최종 동기화: {data.claude.last_synced}</span>
+            )}
           </div>
           {data.claude ? (
             <div className="pl-3.5">
-              <StatRow
-                label="비용 (추정)"
-                today={fmtCost(data.claude.today.cost_usd)}
-                total={fmtCost(data.claude.total.cost_usd)}
-              />
-              <StatRow
-                label="입력 토큰"
-                today={fmt(data.claude.today.input_tokens)}
-                total={fmt(data.claude.total.input_tokens)}
-              />
-              <StatRow
-                label="출력 토큰"
-                today={fmt(data.claude.today.output_tokens)}
-                total={fmt(data.claude.total.output_tokens)}
-              />
-              <StatRow
-                label="캐시 읽기"
-                today={fmt(data.claude.today.cache_read_tokens ?? 0)}
-                total={fmt(data.claude.total.cache_read_tokens ?? 0)}
-              />
+              <StatRow label="비용 (추정)" today={fmtCost(data.claude.today.cost_usd)} total={fmtCost(data.claude.total.cost_usd)} />
+              <StatRow label="입력 토큰" today={fmt(data.claude.today.input_tokens)} total={fmt(data.claude.total.input_tokens)} />
+              <StatRow label="출력 토큰" today={fmt(data.claude.today.output_tokens)} total={fmt(data.claude.total.output_tokens)} />
+              <StatRow label="캐시 읽기" today={fmt(data.claude.today.cache_read_tokens ?? 0)} total={fmt(data.claude.total.cache_read_tokens ?? 0)} />
             </div>
           ) : (
-            <p className="text-xs text-gray-400 pl-3.5">~/.claude 데이터 없음</p>
+            <div className="pl-3.5">
+              <p className="text-xs text-gray-400 mb-1">동기화된 데이터가 없습니다.</p>
+              <p className="text-xs text-gray-400 font-mono bg-gray-50 px-2 py-1 rounded">
+                node scripts/sync-claude-usage.mjs
+              </p>
+            </div>
           )}
         </div>
 
