@@ -19,13 +19,21 @@ interface RecentVideo {
   transcript_status: string;
 }
 
-const FEATURED_QUESTIONS = [
-  "삼성전자 지금 전망이 어떤가요?",
-  "미국 금리 인하 시기가 언제인가요?",
-  "반도체 사이클 현재 어디에 있나요?",
-  "환율 1400원대 전망은?",
-  "코스피 하반기 전망을 알려주세요",
-];
+interface StockNews {
+  stock: string;
+  question: string;
+  videoTitle: string;
+  videoUrl: string;
+  publishedAt: string;
+}
+
+const STOCK_COLORS: Record<string, string> = {
+  "HLB": "bg-red-50 text-red-700 border-red-100",
+  "삼성전자": "bg-blue-50 text-blue-700 border-blue-100",
+  "SK하이닉스": "bg-purple-50 text-purple-700 border-purple-100",
+  "셀트리온": "bg-green-50 text-green-700 border-green-100",
+  "네이버": "bg-emerald-50 text-emerald-700 border-emerald-100",
+};
 
 const KEY_TOPICS = [
   "금리", "환율", "반도체", "삼성전자", "코스피", "나스닥",
@@ -35,6 +43,8 @@ const KEY_TOPICS = [
 export function DashboardContent() {
   const [stats, setStats] = useState<Stats | null>(null);
   const [recentVideos, setRecentVideos] = useState<RecentVideo[]>([]);
+  const [stockNews, setStockNews] = useState<StockNews[]>([]);
+  const [newsLoading, setNewsLoading] = useState(true);
 
   useEffect(() => {
     fetch("/api/collector/status")
@@ -46,6 +56,12 @@ export function DashboardContent() {
       .then((r) => r.json())
       .then((d) => setRecentVideos(d.videos || []))
       .catch(() => {});
+
+    fetch("/api/stocks/news")
+      .then((r) => r.json())
+      .then((d) => setStockNews(d.news || []))
+      .catch(() => {})
+      .finally(() => setNewsLoading(false));
   }, []);
 
   return (
@@ -88,26 +104,49 @@ export function DashboardContent() {
       )}
 
       <div className="grid grid-cols-3 gap-6">
-        {/* Featured Questions */}
+        {/* Stock News Questions */}
         <div className="col-span-2">
           <Card>
-            <CardHeader>
-              <CardTitle className="text-base">오늘의 추천 질문</CardTitle>
+            <CardHeader className="flex flex-row items-center justify-between pb-3">
+              <CardTitle className="text-base">오늘의 종목 소식</CardTitle>
+              <span className="text-xs text-gray-400">클릭하면 AI에게 바로 질문합니다</span>
             </CardHeader>
             <CardContent className="space-y-2">
-              {FEATURED_QUESTIONS.map((q, i) => (
+              {newsLoading ? (
+                <div className="space-y-2">
+                  {[...Array(5)].map((_, i) => (
+                    <div key={i} className="h-16 bg-gray-100 rounded-lg animate-pulse" />
+                  ))}
+                </div>
+              ) : stockNews.map((item, i) => (
                 <button
                   key={i}
-                  className="w-full text-left px-4 py-3 rounded-lg border border-gray-100 hover:border-gray-300 hover:bg-gray-50 transition-all group flex items-center justify-between"
+                  className="w-full text-left px-4 py-3 rounded-lg border border-gray-100 hover:border-gray-300 hover:bg-gray-50 transition-all group"
                   onClick={() => {
-                    const event = new CustomEvent("openChatWithMessage", { detail: q });
+                    const event = new CustomEvent("openChatWithMessage", { detail: item.question });
                     window.dispatchEvent(event);
                   }}
                 >
-                  <span className="text-sm text-gray-700 group-hover:text-gray-900">{q}</span>
-                  <svg className="w-4 h-4 text-gray-300 group-hover:text-gray-500 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-                  </svg>
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="flex items-start gap-3 min-w-0">
+                      <span className={`shrink-0 px-2 py-0.5 rounded text-xs font-bold border ${STOCK_COLORS[item.stock] ?? "bg-gray-50 text-gray-600 border-gray-100"}`}>
+                        {item.stock}
+                      </span>
+                      <div className="min-w-0">
+                        <p className="text-sm text-gray-800 group-hover:text-gray-900 font-medium leading-snug">
+                          {item.question}
+                        </p>
+                        {item.videoTitle && (
+                          <p className="text-xs text-gray-400 mt-0.5 truncate">
+                            📹 {item.videoTitle}
+                          </p>
+                        )}
+                      </div>
+                    </div>
+                    <svg className="w-4 h-4 text-gray-300 group-hover:text-gray-500 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                    </svg>
+                  </div>
                 </button>
               ))}
             </CardContent>
