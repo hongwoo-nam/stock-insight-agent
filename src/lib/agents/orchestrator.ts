@@ -4,22 +4,29 @@ import { searchSimilarChunks } from "@/lib/rag/vectorStore";
 import { AgentResponse, Source } from "@/types";
 import { formatTime } from "@/lib/utils";
 
-const SYSTEM_PROMPT = `당신은 슈카월드 YouTube 채널 영상 기반의 주식·경제 정보 참고 서비스입니다.
+const SYSTEM_PROMPT = `당신은 슈카월드 YouTube 채널 영상 내용을 기반으로 주식·경제 정보를 분석해주는 AI입니다.
 
-규칙:
-1. 반드시 "이 정보는 투자 참고용이며 투자 판단은 본인이 하셔야 합니다."를 포함하세요.
-2. 매수/매도 확정 지시는 절대 하지 마세요.
-3. 슈카월드 영상 근거가 없으면 "슈카월드 영상에서 관련 내용을 찾을 수 없습니다."라고 답하세요.
-4. 종목 질문 시 다음 구조로 답변하세요:
-   1) 현재 질문 요약
-   2) 관련 영상 근거
-   3) 핵심 논점
-   4) 긍정 시나리오
-   5) 부정 시나리오
-   6) 체크해야 할 지표
-   7) 결론 (투자 판단 참고용)
-5. 한국어로 답변하세요.
-6. 출처 영상은 별도로 제공됩니다.`;
+[답변 원칙]
+- 출처 영상의 구체적인 수치, 발언, 논리를 최대한 직접 인용하세요.
+- "~했습니다" 식의 막연한 요약 대신, 영상에서 언급된 구체적인 내용(PER, 시총, 매출, 날짜, 인물 발언 등)을 그대로 사용하세요.
+- 관련 영상 내용이 충분하면 아래 구조로 답변하세요:
+
+  **슈카월드 영상에서 뭐라고 했나**
+  (영상 제목과 함께 핵심 발언/수치를 직접 인용)
+
+  **핵심 포인트**
+  (영상에서 강조한 논점 2~4개를 bullet로)
+
+  **긍정 / 부정 시각**
+  (영상에서 다룬 상승·하락 근거)
+
+  **투자 참고 시 체크할 것**
+  (영상에서 언급한 리스크 지표 또는 모니터링 포인트)
+
+  ※ 이 정보는 투자 참고용이며 투자 판단은 본인이 하셔야 합니다.
+
+- 출처 영상에 관련 내용이 없으면 "슈카월드 영상에서 해당 주제를 다룬 내용이 없습니다."라고 솔직하게 답하세요. 억지로 답변을 만들지 마세요.
+- 한국어로 답변하세요.`;
 
 export async function runOrchestrator(
   userMessage: string,
@@ -30,22 +37,22 @@ export async function runOrchestrator(
 
   // RAG search
   const queryEmbedding = await createEmbedding(userMessage, apiKey);
-  const chunks = await searchSimilarChunks(queryEmbedding, 5);
+  const chunks = await searchSimilarChunks(queryEmbedding, 8);
 
   // Filter relevant chunks
-  const relevantChunks = chunks.filter((c) => c.similarity > 0.3);
+  const relevantChunks = chunks.filter((c) => c.similarity > 0.25);
 
   // Build context
   const context = relevantChunks
     .map(
       (c, i) =>
-        `[출처 ${i + 1}] ${c.title} (${c.url}&t=${Math.floor(c.start_time)}s)\n${c.chunk_text}`
+        `[출처 ${i + 1}: "${c.title}" — ${Math.floor(c.start_time / 60)}분 ${Math.floor(c.start_time % 60)}초]\n${c.chunk_text}`
     )
     .join("\n\n---\n\n");
 
   const contextMessage =
     relevantChunks.length > 0
-      ? `\n\n[슈카월드 영상 관련 내용]\n${context}`
+      ? `\n\n아래는 슈카월드 영상에서 관련 부분을 발췌한 내용입니다. 이 내용을 바탕으로 답변해 주세요:\n\n${context}`
       : "\n\n[슈카월드 영상에서 관련 내용을 찾을 수 없습니다]";
 
   const messages: OpenAI.Chat.ChatCompletionMessageParam[] = [
