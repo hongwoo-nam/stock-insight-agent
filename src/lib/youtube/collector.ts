@@ -1,8 +1,6 @@
 import { YoutubeTranscript } from "youtube-transcript";
 import { getSupabase } from "@/lib/db/client";
 
-const YOUTUBE_API_BASE = "https://www.googleapis.com/youtube/v3";
-
 export interface VideoInfo {
   video_id: string;
   title: string;
@@ -11,78 +9,52 @@ export interface VideoInfo {
   duration: number;
 }
 
-export async function fetchChannelVideos(
-  apiKey: string,
-  maxResults = 50
-): Promise<VideoInfo[]> {
-  // Try @handle format first, then without @
-  let channelData;
-  for (const handle of ["@syukaworld", "syukaworld"]) {
-    const res = await fetch(
-      `${YOUTUBE_API_BASE}/channels?part=id,contentDetails&forHandle=${handle}&key=${apiKey}`
-    );
-    channelData = await res.json();
-    if (channelData.items?.length) break;
-  }
-
-  // Fallback: search by channel name
-  if (!channelData?.items?.length) {
-    const searchRes = await fetch(
-      `${YOUTUBE_API_BASE}/search?part=snippet&type=channel&q=슈카월드&maxResults=1&key=${apiKey}`
-    );
-    const searchData = await searchRes.json();
-    if (searchData.items?.length) {
-      const channelId = searchData.items[0].snippet.channelId;
-      const res = await fetch(
-        `${YOUTUBE_API_BASE}/channels?part=id,contentDetails&id=${channelId}&key=${apiKey}`
-      );
-      channelData = await res.json();
-    }
-  }
-
-  if (!channelData?.items?.length) throw new Error(`Channel not found. API response: ${JSON.stringify(channelData)}`);
-
-  const uploadsPlaylistId =
-    channelData.items[0].contentDetails.relatedPlaylists.uploads;
-
-  const playlistRes = await fetch(
-    `${YOUTUBE_API_BASE}/playlistItems?part=snippet&playlistId=${uploadsPlaylistId}&maxResults=${maxResults}&key=${apiKey}`
-  );
-  const playlistData = await playlistRes.json();
-
-  const videoIds = playlistData.items.map(
-    (item: { snippet: { resourceId: { videoId: string } } }) =>
-      item.snippet.resourceId.videoId
-  );
-
-  const detailsRes = await fetch(
-    `${YOUTUBE_API_BASE}/videos?part=snippet,contentDetails&id=${videoIds.join(",")}&key=${apiKey}`
-  );
-  const detailsData = await detailsRes.json();
-
-  return detailsData.items.map(
-    (item: {
-      id: string;
-      snippet: { title: string; publishedAt: string };
-      contentDetails: { duration: string };
-    }) => ({
-      video_id: item.id,
-      title: item.snippet.title,
-      url: `https://www.youtube.com/watch?v=${item.id}`,
-      published_at: item.snippet.publishedAt,
-      duration: parseISO8601Duration(item.contentDetails.duration),
-    })
-  );
+async function getChannelId(): Promise<string> {
+  // Fetch channel page and extract channel ID from HTML
+  const res = await fetch("https://www.youtube.com/@syukaworld", {
+    headers: { "User-Agent": "Mozilla/5.0 (compatible; Googlebot/2.1)" },
+  });
+  const html = await res.text();
+  const match = html.match(/"channelId":"(UC[^"]+)"/);
+  if (!match) throw new Error("Could not extract channel ID from YouTube page");
+  return match[1];
 }
 
-function parseISO8601Duration(duration: string): number {
-  const match = duration.match(/PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?/);
-  if (!match) return 0;
-  return (
-    parseInt(match[1] || "0") * 3600 +
-    parseInt(match[2] || "0") * 60 +
-    parseInt(match[3] || "0")
-  );
+export async function fetchChannelVideos(
+  _apiKey: string,
+  maxResults = 50
+): Promise<VideoInfo[]> {
+  const channelId = await getChannelId();
+
+  // Use YouTube RSS feed — no API key required
+  const rssUrl = `https://www.youtube.com/feeds/videos.xml?channel_id=${channelId}`;
+  const rssRes = await fetch(rssUrl);
+  const rssText = await rssRes.text();
+
+  // Parse RSS XML
+  const entries = [...rssText.matchAll(/<entry>([\s\S]*?)<\/entry>/g)];
+  const videos: VideoInfo[] = [];
+
+  for (const entry of entries.slice(0, maxResults)) {
+    const content = entry[1];
+    const videoIdMatch = content.match(/<yt:videoId>([^<]+)<\/yt:videoId>/);
+    const titleMatch = content.match(/<title>([^<]+)<\/title>/);
+    const publishedMatch = content.match(/<published>([^<]+)<\/published>/);
+
+    if (!videoIdMatch || !titleMatch) continue;
+
+    const videoId = videoIdMatch[1];
+    videos.push({
+      video_id: videoId,
+      title: titleMatch[1].replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">"),
+      url: `https://www.youtube.com/watch?v=${videoId}`,
+      published_at: publishedMatch?.[1] || new Date().toISOString(),
+      duration: 0,
+    });
+  }
+
+  if (!videos.length) throw new Error("No videos found in RSS feed");
+  return videos;
 }
 
 export async function getNewVideoIds(videoIds: string[]): Promise<string[]> {
