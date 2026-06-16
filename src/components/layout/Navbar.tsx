@@ -61,16 +61,28 @@ export function Navbar() {
             );
           })}
           {user?.role === "ADMIN" && (
-            <Link
-              href="/admin/members"
-              className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
-                pathname === "/admin/members"
-                  ? "bg-gray-100 text-gray-900"
-                  : "text-gray-500 hover:text-gray-900 hover:bg-gray-50"
-              }`}
-            >
-              회원관리
-            </Link>
+            <>
+              <Link
+                href="/admin/members"
+                className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
+                  pathname === "/admin/members"
+                    ? "bg-gray-100 text-gray-900"
+                    : "text-gray-500 hover:text-gray-900 hover:bg-gray-50"
+                }`}
+              >
+                회원관리
+              </Link>
+              <Link
+                href="/admin/collect"
+                className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
+                  pathname === "/admin/collect"
+                    ? "bg-gray-100 text-gray-900"
+                    : "text-gray-500 hover:text-gray-900 hover:bg-gray-50"
+                }`}
+              >
+                정보수집
+              </Link>
+            </>
           )}
         </div>
 
