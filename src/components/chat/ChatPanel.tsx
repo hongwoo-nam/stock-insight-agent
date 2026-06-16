@@ -11,9 +11,11 @@ interface ChatPanelProps {
   isOpen: boolean;
   onClose: () => void;
   voiceType?: "male" | "female";
+  initialMessage?: string | null;
+  onInitialMessageSent?: () => void;
 }
 
-export function ChatPanel({ isOpen, onClose, voiceType = "male" }: ChatPanelProps) {
+export function ChatPanel({ isOpen, onClose, voiceType = "male", initialMessage, onInitialMessageSent }: ChatPanelProps) {
   const [messages, setMessages] = useState<ChatMessage[]>([
     {
       id: "0",
@@ -34,6 +36,13 @@ export function ChatPanel({ isOpen, onClose, voiceType = "male" }: ChatPanelProp
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
+
+  useEffect(() => {
+    if (isOpen && initialMessage) {
+      sendMessage(initialMessage);
+      onInitialMessageSent?.();
+    }
+  }, [isOpen, initialMessage]);
 
   const sendMessage = useCallback(async (text: string) => {
     if (!text.trim() || loading) return;
