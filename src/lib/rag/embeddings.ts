@@ -1,4 +1,5 @@
 import OpenAI from "openai";
+import { logUsage } from "@/lib/db/usage";
 
 let client: OpenAI | null = null;
 
@@ -18,6 +19,8 @@ export async function createEmbedding(
     model: "text-embedding-3-small",
     input: text,
   });
+  const tokens = response.usage?.total_tokens ?? 0;
+  void logUsage("embedding", "text-embedding-3-small", tokens, 0);
   return response.data[0].embedding;
 }
 

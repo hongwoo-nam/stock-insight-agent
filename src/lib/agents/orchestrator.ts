@@ -3,6 +3,7 @@ import { createEmbedding } from "@/lib/rag/embeddings";
 import { searchSimilarChunks } from "@/lib/rag/vectorStore";
 import { AgentResponse, Source } from "@/types";
 import { formatTime } from "@/lib/utils";
+import { logUsage } from "@/lib/db/usage";
 
 const SYSTEM_PROMPT = `당신은 슈카월드 YouTube 채널 영상 내용을 기반으로 주식·경제 정보를 분석해주는 AI입니다.
 
@@ -75,6 +76,12 @@ export async function runOrchestrator(
   });
 
   const answer = completion.choices[0].message.content || "";
+
+  // 사용량 로깅 (비동기, 실패해도 무시)
+  const usage = completion.usage;
+  if (usage) {
+    void logUsage("chat", "gpt-4o", usage.prompt_tokens, usage.completion_tokens);
+  }
 
   // Extract risk points from answer
   const riskPoints = extractRiskPoints(answer);

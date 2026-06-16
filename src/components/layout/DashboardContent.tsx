@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { formatDate } from "@/lib/utils";
+import { UsageCard } from "@/components/dashboard/UsageCard";
 
 interface Stats {
   total_videos: string;
@@ -106,8 +107,8 @@ export function DashboardContent() {
       )}
 
       <div className="grid grid-cols-3 gap-6">
-        {/* Stock News Questions */}
-        <div className="col-span-2">
+        {/* Stock News + Usage */}
+        <div className="col-span-2 space-y-4">
           <Card>
             <CardHeader className="flex flex-row items-center justify-between pb-3">
               <CardTitle className="text-base">오늘의 종목 소식</CardTitle>
@@ -153,6 +154,9 @@ export function DashboardContent() {
               ))}
             </CardContent>
           </Card>
+
+          {/* API 사용량 카드 */}
+          <UsageCard />
         </div>
 
         {/* Right column */}
