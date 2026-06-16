@@ -13,6 +13,8 @@ const DEFAULT_KEYWORDS = [
   "SK하이닉스 주식",
   "셀트리온 주식",
   "네이버 주식",
+  "금리인상",
+  "미국 이란 전쟁",
 ];
 
 type Mode = "channel" | "stock";
