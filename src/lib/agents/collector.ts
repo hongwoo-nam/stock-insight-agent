@@ -6,6 +6,7 @@ import {
   saveVideo,
   updateVideoStatus,
   getNewVideoIds,
+  type TranscriptSegment,
 } from "@/lib/youtube/collector";
 import { createEmbeddingsBatch } from "@/lib/rag/embeddings";
 import { saveChunks } from "@/lib/rag/vectorStore";
@@ -41,6 +42,19 @@ export async function runCollector(): Promise<CollectionResult> {
     const newIds = await getNewVideoIds(videos.map((v) => v.video_id));
     const newVideos = videos.filter((v) => newIds.includes(v.video_id));
     result.new_videos = newVideos.length;
+
+    // Also retry previously failed no_transcript videos
+    const { data: retryVideos } = await supabase
+      .from("videos")
+      .select("video_id, title, url, published_at, duration")
+      .eq("transcript_status", "no_transcript")
+      .limit(20);
+
+    for (const v of retryVideos || []) {
+      if (!newVideos.find((nv) => nv.video_id === v.video_id)) {
+        newVideos.push({ video_id: v.video_id, title: v.title, url: v.url, published_at: v.published_at, duration: v.duration });
+      }
+    }
 
     for (const video of newVideos) {
       try {

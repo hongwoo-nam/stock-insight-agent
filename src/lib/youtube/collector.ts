@@ -1,5 +1,6 @@
-import { YoutubeTranscript } from "youtube-transcript";
 import { getSupabase } from "@/lib/db/client";
+import { fetchTranscript as fetchTranscriptDirect } from "./transcript";
+export type { TranscriptSegment } from "./transcript";
 
 export interface VideoInfo {
   video_id: string;
@@ -148,22 +149,9 @@ export async function getNewVideoIds(videoIds: string[]): Promise<string[]> {
   return videoIds.filter((id) => !existingSet.has(id));
 }
 
-export interface TranscriptSegment {
-  text: string;
-  offset: number;
-  duration: number;
-}
+export const fetchTranscript = fetchTranscriptDirect;
 
-export async function fetchTranscript(videoId: string): Promise<TranscriptSegment[]> {
-  const transcript = await YoutubeTranscript.fetchTranscript(videoId, { lang: "ko" }).catch(() =>
-    YoutubeTranscript.fetchTranscript(videoId)
-  );
-  return transcript.map((item) => ({
-    text: item.text,
-    offset: item.offset / 1000,
-    duration: item.duration / 1000,
-  }));
-}
+export type { TranscriptSegment };
 
 export function chunkTranscript(
   segments: TranscriptSegment[],
