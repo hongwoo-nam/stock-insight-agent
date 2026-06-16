@@ -28,11 +28,13 @@ interface StockNews {
 }
 
 const STOCK_COLORS: Record<string, string> = {
-  "HLB": "bg-red-50 text-red-700 border-red-100",
-  "삼성전자": "bg-blue-50 text-blue-700 border-blue-100",
+  "HLB":      "bg-red-50 text-red-700 border-red-100",
+  "삼성전자":  "bg-blue-50 text-blue-700 border-blue-100",
   "SK하이닉스": "bg-purple-50 text-purple-700 border-purple-100",
-  "셀트리온": "bg-green-50 text-green-700 border-green-100",
-  "네이버": "bg-emerald-50 text-emerald-700 border-emerald-100",
+  "셀트리온":  "bg-green-50 text-green-700 border-green-100",
+  "네이버":    "bg-emerald-50 text-emerald-700 border-emerald-100",
+  "금리":      "bg-orange-50 text-orange-700 border-orange-100",
+  "미이란":    "bg-rose-50 text-rose-700 border-rose-100",
 };
 
 const KEY_TOPICS = [
