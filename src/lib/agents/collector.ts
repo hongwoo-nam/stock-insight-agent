@@ -46,7 +46,25 @@ export async function runCollector(): Promise<CollectionResult> {
       try {
         await saveVideo(video);
         await updateVideoStatus(video.video_id, "processing");
-        const segments = await fetchTranscript(video.video_id);
+
+        let segments;
+        try {
+          segments = await fetchTranscript(video.video_id);
+        } catch (transcriptErr) {
+          const msg = transcriptErr instanceof Error ? transcriptErr.message : String(transcriptErr);
+          // Skip videos with no transcript — not a failure
+          if (msg.includes("disabled") || msg.includes("Transcript") || msg.includes("No transcript")) {
+            await updateVideoStatus(video.video_id, "no_transcript");
+            continue;
+          }
+          throw transcriptErr;
+        }
+
+        if (!segments.length) {
+          await updateVideoStatus(video.video_id, "no_transcript");
+          continue;
+        }
+
         const chunks = chunkTranscript(segments);
         const embeddings = await createEmbeddingsBatch(chunks.map((c) => c.text), openaiKey);
         await saveChunks(video.video_id, chunks.map((c, i) => ({ ...c, embedding: embeddings[i], index: i })));

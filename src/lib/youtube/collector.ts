@@ -20,41 +20,80 @@ async function getChannelId(): Promise<string> {
   return match[1];
 }
 
+function decodeHtml(str: string): string {
+  return str
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'");
+}
+
 export async function fetchChannelVideos(
   _apiKey: string,
   maxResults = 50
 ): Promise<VideoInfo[]> {
   const channelId = await getChannelId();
-
-  // Use YouTube RSS feed — no API key required
-  const rssUrl = `https://www.youtube.com/feeds/videos.xml?channel_id=${channelId}`;
-  const rssRes = await fetch(rssUrl);
-  const rssText = await rssRes.text();
-
-  // Parse RSS XML
-  const entries = [...rssText.matchAll(/<entry>([\s\S]*?)<\/entry>/g)];
   const videos: VideoInfo[] = [];
+  const seen = new Set<string>();
 
-  for (const entry of entries.slice(0, maxResults)) {
+  // RSS feed — latest 15 videos, no API key required
+  const rssUrl = `https://www.youtube.com/feeds/videos.xml?channel_id=${channelId}`;
+  const rssRes = await fetch(rssUrl, {
+    headers: { "User-Agent": "Mozilla/5.0 (compatible; Googlebot/2.1)" },
+  });
+  const rssText = await rssRes.text();
+  const entries = [...rssText.matchAll(/<entry>([\s\S]*?)<\/entry>/g)];
+
+  for (const entry of entries) {
     const content = entry[1];
     const videoIdMatch = content.match(/<yt:videoId>([^<]+)<\/yt:videoId>/);
     const titleMatch = content.match(/<title>([^<]+)<\/title>/);
     const publishedMatch = content.match(/<published>([^<]+)<\/published>/);
-
     if (!videoIdMatch || !titleMatch) continue;
-
     const videoId = videoIdMatch[1];
+    if (seen.has(videoId)) continue;
+    seen.add(videoId);
     videos.push({
       video_id: videoId,
-      title: titleMatch[1].replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">"),
+      title: decodeHtml(titleMatch[1]),
       url: `https://www.youtube.com/watch?v=${videoId}`,
       published_at: publishedMatch?.[1] || new Date().toISOString(),
       duration: 0,
     });
   }
 
-  if (!videos.length) throw new Error("No videos found in RSS feed");
-  return videos;
+  // If more videos needed, scrape channel page for additional IDs
+  if (videos.length < maxResults) {
+    try {
+      const pageRes = await fetch(`https://www.youtube.com/@syukaworld/videos`, {
+        headers: { "User-Agent": "Mozilla/5.0 (compatible; Googlebot/2.1)" },
+      });
+      const pageHtml = await pageRes.text();
+      // Extract video IDs from page JSON data
+      const idMatches = [...pageHtml.matchAll(/"videoId":"([a-zA-Z0-9_-]{11})"/g)];
+      const titleMatches = [...pageHtml.matchAll(/"title":{"runs":\[{"text":"([^"]+)"/g)];
+
+      for (let i = 0; i < idMatches.length && videos.length < maxResults; i++) {
+        const videoId = idMatches[i][1];
+        if (seen.has(videoId)) continue;
+        seen.add(videoId);
+        const title = titleMatches[i]?.[1] ? decodeHtml(titleMatches[i][1]) : `영상 ${videoId}`;
+        videos.push({
+          video_id: videoId,
+          title,
+          url: `https://www.youtube.com/watch?v=${videoId}`,
+          published_at: new Date().toISOString(),
+          duration: 0,
+        });
+      }
+    } catch {
+      // Channel page scraping failed — use RSS results only
+    }
+  }
+
+  if (!videos.length) throw new Error("No videos found");
+  return videos.slice(0, maxResults);
 }
 
 export async function getNewVideoIds(videoIds: string[]): Promise<string[]> {
