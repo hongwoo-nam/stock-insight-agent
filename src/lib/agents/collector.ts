@@ -1,4 +1,4 @@
-import { query } from "@/lib/db/client";
+import { getSupabase } from "@/lib/db/client";
 import {
   fetchChannelVideos,
   fetchTranscript,
@@ -26,49 +26,30 @@ export async function runCollector(): Promise<CollectionResult> {
     throw new Error("API keys not configured");
   }
 
-  const result: CollectionResult = {
-    new_videos: 0,
-    processed: 0,
-    failed: 0,
-    errors: [],
-  };
+  const result: CollectionResult = { new_videos: 0, processed: 0, failed: 0, errors: [] };
 
-  // Log start
-  const [logRow] = await query<{ id: number }>(
-    `INSERT INTO collection_logs (job_date, status, new_video_count)
-     VALUES (CURRENT_DATE, 'running', 0)
-     RETURNING id`
-  );
-  const logId = logRow.id;
+  const supabase = getSupabase();
+  const { data: logRow } = await supabase
+    .from("collection_logs")
+    .insert({ job_date: new Date().toISOString().split("T")[0], status: "running", new_video_count: 0 })
+    .select("id")
+    .single();
+  const logId = logRow?.id;
 
   try {
     const videos = await fetchChannelVideos(youtubeKey);
-    const videoIds = videos.map((v) => v.video_id);
-    const newIds = await getNewVideoIds(videoIds);
+    const newIds = await getNewVideoIds(videos.map((v) => v.video_id));
     const newVideos = videos.filter((v) => newIds.includes(v.video_id));
-
     result.new_videos = newVideos.length;
 
     for (const video of newVideos) {
       try {
         await saveVideo(video);
         await updateVideoStatus(video.video_id, "processing");
-
         const segments = await fetchTranscript(video.video_id);
         const chunks = chunkTranscript(segments);
-
-        const texts = chunks.map((c) => c.text);
-        const embeddings = await createEmbeddingsBatch(texts, openaiKey);
-
-        await saveChunks(
-          video.video_id,
-          chunks.map((c, i) => ({
-            ...c,
-            embedding: embeddings[i],
-            index: i,
-          }))
-        );
-
+        const embeddings = await createEmbeddingsBatch(chunks.map((c) => c.text), openaiKey);
+        await saveChunks(video.video_id, chunks.map((c, i) => ({ ...c, embedding: embeddings[i], index: i })));
         await updateVideoStatus(video.video_id, "done");
         result.processed++;
       } catch (err) {
@@ -79,16 +60,20 @@ export async function runCollector(): Promise<CollectionResult> {
       }
     }
 
-    await query(
-      `UPDATE collection_logs SET status = 'completed', new_video_count = $1 WHERE id = $2`,
-      [result.processed, logId]
-    );
+    if (logId) {
+      await supabase
+        .from("collection_logs")
+        .update({ status: "completed", new_video_count: result.processed })
+        .eq("id", logId);
+    }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    await query(
-      `UPDATE collection_logs SET status = 'failed', error_message = $1 WHERE id = $2`,
-      [msg, logId]
-    );
+    if (logId) {
+      await supabase
+        .from("collection_logs")
+        .update({ status: "failed", error_message: msg })
+        .eq("id", logId);
+    }
     throw err;
   }
 

@@ -1,26 +1,39 @@
 import { NextResponse } from "next/server";
-import { query } from "@/lib/db/client";
+import { getSupabase } from "@/lib/db/client";
 
 export async function GET() {
   try {
-    const logs = await query(
-      `SELECT * FROM collection_logs ORDER BY created_at DESC LIMIT 10`
-    );
-    const [stats] = await query<{
-      total_videos: string;
-      done_videos: string;
-      total_chunks: string;
-    }>(
-      `SELECT
-         COUNT(DISTINCT v.id)::text AS total_videos,
-         COUNT(DISTINCT CASE WHEN v.transcript_status = 'done' THEN v.id END)::text AS done_videos,
-         COUNT(tc.id)::text AS total_chunks
-       FROM videos v
-       LEFT JOIN transcript_chunks tc ON tc.video_id = v.video_id`
-    );
-    return NextResponse.json({ logs, stats });
+    const supabase = getSupabase();
+
+    const { data: logs } = await supabase
+      .from("collection_logs")
+      .select("*")
+      .order("created_at", { ascending: false })
+      .limit(10);
+
+    const { count: totalVideos } = await supabase
+      .from("videos")
+      .select("*", { count: "exact", head: true });
+
+    const { count: doneVideos } = await supabase
+      .from("videos")
+      .select("*", { count: "exact", head: true })
+      .eq("transcript_status", "done");
+
+    const { count: totalChunks } = await supabase
+      .from("transcript_chunks")
+      .select("*", { count: "exact", head: true });
+
+    return NextResponse.json({
+      logs: logs || [],
+      stats: {
+        total_videos: String(totalVideos || 0),
+        done_videos: String(doneVideos || 0),
+        total_chunks: String(totalChunks || 0),
+      },
+    });
   } catch (err) {
-    console.error("Collector status error:", err);
-    return NextResponse.json({ error: "Failed to fetch status" }, { status: 500 });
+    const msg = err instanceof Error ? err.message : String(err);
+    return NextResponse.json({ error: msg }, { status: 500 });
   }
 }

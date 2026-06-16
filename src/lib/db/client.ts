@@ -1,24 +1,13 @@
-import { Pool } from "pg";
+import { createClient, SupabaseClient } from "@supabase/supabase-js";
 
-let pool: Pool | null = null;
+let client: SupabaseClient | null = null;
 
-export function getPool(): Pool {
-  if (!pool) {
-    pool = new Pool({
-      connectionString: process.env.DATABASE_URL,
-      max: 10,
-      idleTimeoutMillis: 30000,
-      ssl: process.env.DATABASE_URL?.includes("supabase") ? { rejectUnauthorized: false } : false,
-    });
+export function getSupabase(): SupabaseClient {
+  if (!client) {
+    const url = process.env.SUPABASE_URL!;
+    const key = process.env.SUPABASE_ANON_KEY!;
+    if (!url || !key) throw new Error("SUPABASE_URL and SUPABASE_ANON_KEY are required");
+    client = createClient(url, key);
   }
-  return pool;
-}
-
-export async function query<T = unknown>(
-  sql: string,
-  params?: unknown[]
-): Promise<T[]> {
-  const client = getPool();
-  const result = await client.query(sql, params);
-  return result.rows as T[];
+  return client;
 }

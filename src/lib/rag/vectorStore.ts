@@ -1,4 +1,4 @@
-import { query } from "@/lib/db/client";
+import { getSupabase } from "@/lib/db/client";
 import { Source } from "@/types";
 
 export async function saveChunks(
@@ -11,46 +11,43 @@ export async function saveChunks(
     index: number;
   }>
 ): Promise<void> {
-  for (const chunk of chunks) {
-    const embeddingStr = `[${chunk.embedding.join(",")}]`;
-    await query(
-      `INSERT INTO transcript_chunks (video_id, chunk_index, chunk_text, start_time, end_time, embedding)
-       VALUES ($1, $2, $3, $4, $5, $6::vector)
-       ON CONFLICT (video_id, chunk_index) DO UPDATE
-       SET chunk_text = $3, start_time = $4, end_time = $5, embedding = $6::vector`,
-      [videoId, chunk.index, chunk.text, chunk.start_time, chunk.end_time, embeddingStr]
-    );
-  }
+  const supabase = getSupabase();
+  const rows = chunks.map((c) => ({
+    video_id: videoId,
+    chunk_index: c.index,
+    chunk_text: c.text,
+    start_time: c.start_time,
+    end_time: c.end_time,
+    embedding: JSON.stringify(c.embedding),
+  }));
+
+  const { error } = await supabase
+    .from("transcript_chunks")
+    .upsert(rows, { onConflict: "video_id,chunk_index" });
+
+  if (error) throw new Error(error.message);
 }
 
 export async function searchSimilarChunks(
   embedding: number[],
   topK = 5
 ): Promise<(Source & { video_title: string; video_url: string })[]> {
-  const embeddingStr = `[${embedding.join(",")}]`;
-  const rows = await query<{
+  const supabase = getSupabase();
+  const { data, error } = await supabase.rpc("search_chunks", {
+    query_embedding: JSON.stringify(embedding),
+    match_count: topK,
+  });
+
+  if (error) throw new Error(error.message);
+
+  return (data || []).map((r: {
     video_id: string;
-    chunk_text: string;
-    start_time: number;
     title: string;
     url: string;
+    start_time: number;
+    chunk_text: string;
     similarity: number;
-  }>(
-    `SELECT
-       tc.video_id,
-       tc.chunk_text,
-       tc.start_time,
-       v.title,
-       v.url,
-       1 - (tc.embedding <=> $1::vector) AS similarity
-     FROM transcript_chunks tc
-     JOIN videos v ON v.video_id = tc.video_id
-     ORDER BY tc.embedding <=> $1::vector
-     LIMIT $2`,
-    [embeddingStr, topK]
-  );
-
-  return rows.map((r) => ({
+  }) => ({
     video_id: r.video_id,
     title: r.title,
     url: r.url,
