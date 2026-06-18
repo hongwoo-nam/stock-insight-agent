@@ -274,8 +274,27 @@ async function processVideos(videos, label) {
 // ─────────────────────────────────────────────────────────────
 // 메인
 // ─────────────────────────────────────────────────────────────
+async function cleanOldData() {
+  const cutoff = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+  console.log(`🗑️  7일 경과 데이터 정리 중... (기준: ${cutoff.slice(0, 10)})`);
+  const { data: oldVideos } = await supabase
+    .from("videos")
+    .select("video_id")
+    .lt("published_at", cutoff);
+  if (oldVideos && oldVideos.length > 0) {
+    const ids = oldVideos.map(v => v.video_id);
+    await supabase.from("transcript_chunks").delete().in("video_id", ids);
+    await supabase.from("videos").delete().in("video_id", ids);
+    console.log(`   → ${ids.length}개 영상 및 관련 청크 삭제 완료\n`);
+  } else {
+    console.log("   → 삭제할 데이터 없음\n");
+  }
+}
+
 async function main() {
   const stockMode = process.argv.includes("--stock");
+
+  await cleanOldData();
 
   if (stockMode) {
     console.log("🔍 종목 키워드 검색 수집 모드 (최근 1주일)\n");

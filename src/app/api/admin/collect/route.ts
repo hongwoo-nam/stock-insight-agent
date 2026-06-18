@@ -158,6 +158,22 @@ export async function POST(req: NextRequest) {
       if (!openaiKey) { sse(controller, { type: "error", message: "OpenAI API 키가 설정되지 않았습니다." }); controller.close(); return; }
       const openai = new OpenAI({ apiKey: openaiKey });
 
+      // 7일 경과 데이터 삭제
+      sse(controller, { type: "log", message: "🗑️  7일 경과 데이터 정리 중..." });
+      const cutoff = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+      const { data: oldVideos } = await supabase
+        .from("videos")
+        .select("video_id")
+        .lt("published_at", cutoff);
+      if (oldVideos && oldVideos.length > 0) {
+        const ids = oldVideos.map(v => v.video_id);
+        await supabase.from("transcript_chunks").delete().in("video_id", ids);
+        await supabase.from("videos").delete().in("video_id", ids);
+        sse(controller, { type: "log", message: `   → ${ids.length}개 영상 및 관련 청크 삭제 완료` });
+      } else {
+        sse(controller, { type: "log", message: "   → 삭제할 데이터 없음" });
+      }
+
       let allVideos: { video_id: string; title: string; url: string; published_at: string; channel_name: string }[] = [];
 
       if (mode === "channel") {
