@@ -20,6 +20,11 @@ const DEFAULT_KEYWORDS = [
 type Mode = "channel" | "stock";
 type Status = "idle" | "running" | "done" | "error";
 
+interface FdaResult {
+  source: string; url: string; found: boolean; approved: boolean | null;
+  matchedKeywords: string[]; snippet: string; error?: string;
+}
+
 export default function CollectPage() {
   const [mode, setMode] = useState<Mode>("stock");
   const [keywordList, setKeywordList] = useState<string[]>(DEFAULT_KEYWORDS);
@@ -30,6 +35,9 @@ export default function CollectPage() {
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
   const [stats, setStats] = useState<{ done: number; noTranscript: number; failed: number; totalChunks: number | null } | null>(null);
   const logRef = useRef<HTMLDivElement>(null);
+  const [fdaResults, setFdaResults] = useState<FdaResult[] | null>(null);
+  const [fdaLoading, setFdaLoading] = useState(false);
+  const [fdaSmsText, setFdaSmsText] = useState<string | null>(null);
 
   useEffect(() => {
     logRef.current?.scrollTo({ top: logRef.current.scrollHeight, behavior: "smooth" });
@@ -93,6 +101,22 @@ export default function CollectPage() {
     } catch (e) {
       setLogs(p => [...p, `❌ 연결 오류: ${e instanceof Error ? e.message : ""}`]);
       setStatus("error");
+    }
+  }
+
+  async function checkFda() {
+    setFdaLoading(true);
+    setFdaResults(null);
+    setFdaSmsText(null);
+    try {
+      const res = await fetch("/api/admin/fda-check", { method: "POST" });
+      const data = await res.json();
+      setFdaResults(data.results ?? []);
+      setFdaSmsText(data.smsText ?? null);
+    } catch (e) {
+      setFdaResults([]);
+    } finally {
+      setFdaLoading(false);
     }
   }
 
@@ -328,6 +352,70 @@ export default function CollectPage() {
             )}
           </div>
         )}
+
+        {/* HLB FDA 승인 모니터링 */}
+        <div className="bg-white rounded-2xl border border-amber-100 shadow-sm p-6 mt-4">
+          <div className="flex items-center justify-between mb-4">
+            <div>
+              <h2 className="text-base font-semibold text-gray-900 flex items-center gap-2">
+                🏥 HLB FDA 승인 모니터링
+              </h2>
+              <p className="text-xs text-gray-500 mt-1">
+                간암신약 PDUFA <span className="font-medium text-amber-700">2026-07-23</span> &nbsp;·&nbsp;
+                담관암신약 PDUFA <span className="font-medium text-amber-700">2026-09-23</span>
+              </p>
+            </div>
+            <button
+              onClick={checkFda}
+              disabled={fdaLoading}
+              className="px-4 py-2 bg-amber-600 hover:bg-amber-700 disabled:bg-amber-300 text-white text-sm font-medium rounded-xl transition-colors flex items-center gap-2"
+            >
+              {fdaLoading ? (
+                <><svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" /><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" /></svg>확인 중...</>
+              ) : "🔍 지금 확인"}
+            </button>
+          </div>
+
+          {fdaSmsText && (
+            <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-xl">
+              <p className="text-xs font-semibold text-red-700 mb-1">🚨 관련 소식 감지 — SMS 전송됨</p>
+              <pre className="text-xs text-red-800 whitespace-pre-wrap">{fdaSmsText}</pre>
+            </div>
+          )}
+
+          {fdaResults && (
+            <div className="space-y-2">
+              {fdaResults.map((r, i) => (
+                <div key={i} className={`p-3 rounded-xl border text-xs ${r.found ? "bg-red-50 border-red-200" : "bg-gray-50 border-gray-100"}`}>
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <span className={`font-medium ${r.found ? "text-red-700" : "text-gray-600"}`}>{r.source}</span>
+                      {r.error && <span className="text-red-400">(오류)</span>}
+                    </div>
+                    <div className="flex items-center gap-2">
+                      {r.found && (
+                        <span className={`px-2 py-0.5 rounded-full text-xs font-bold ${r.approved === true ? "bg-green-100 text-green-700" : r.approved === false ? "bg-red-100 text-red-700" : "bg-yellow-100 text-yellow-700"}`}>
+                          {r.approved === true ? "✅ 승인" : r.approved === false ? "❌ 거절/CRL" : "📋 관련소식"}
+                        </span>
+                      )}
+                      {!r.found && !r.error && <span className="text-gray-400">관련 없음</span>}
+                    </div>
+                  </div>
+                  {r.found && r.matchedKeywords.length > 0 && (
+                    <p className="mt-1 text-gray-500">키워드: {r.matchedKeywords.join(", ")}</p>
+                  )}
+                  {r.snippet && (
+                    <p className="mt-1 text-gray-600 line-clamp-2">{r.snippet}</p>
+                  )}
+                  {r.error && <p className="mt-1 text-red-400">{r.error}</p>}
+                </div>
+              ))}
+              {fdaResults.every(r => !r.found) && (
+                <p className="text-center text-sm text-gray-400 py-2">현재 FDA 승인 관련 소식 없음</p>
+              )}
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );

@@ -54,7 +54,7 @@ function isWithinOneWeek(text: string): boolean {
 }
 
 async function searchYouTube(keyword: string): Promise<{ video_id: string; title: string; url: string; published_at: string; channel_name: string }[]> {
-  const url = `https://www.youtube.com/results?search_query=${encodeURIComponent(keyword)}&sp=EgQIAxAB`;
+  const url = `https://www.youtube.com/results?search_query=${encodeURIComponent(keyword)}&sp=EgQIAxAB&gl=KR&hl=ko`;
   const res = await fetch(url, { headers: HEADERS });
   const html = await res.text();
   const idx = html.indexOf("var ytInitialData = "); const endIdx = html.indexOf(";<\/script>", idx); const match = idx >= 0 && endIdx >= 0 ? [null, html.slice(idx + 20, endIdx)] : null;
@@ -158,9 +158,9 @@ export async function POST(req: NextRequest) {
       if (!openaiKey) { sse(controller, { type: "error", message: "OpenAI API 키가 설정되지 않았습니다." }); controller.close(); return; }
       const openai = new OpenAI({ apiKey: openaiKey });
 
-      // 7일 경과 데이터 삭제
-      sse(controller, { type: "log", message: "🗑️  7일 경과 데이터 정리 중..." });
-      const cutoff = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+      // 14일 경과 데이터 삭제
+      sse(controller, { type: "log", message: "🗑️  14일 경과 데이터 정리 중..." });
+      const cutoff = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000).toISOString();
       const { data: oldVideos } = await supabase
         .from("videos")
         .select("video_id")

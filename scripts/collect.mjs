@@ -70,7 +70,7 @@ const TARGET_CHANNELS = [
 // sp=EgQIAxAB → "이번 주" 필터
 // ─────────────────────────────────────────────────────────────
 async function searchYouTube(keyword, maxResults = 15) {
-  const url = `https://www.youtube.com/results?search_query=${encodeURIComponent(keyword)}&sp=EgQIAxAB`;
+  const url = `https://www.youtube.com/results?search_query=${encodeURIComponent(keyword)}&sp=EgQIAxAB&gl=KR&hl=ko`;
   const res = await fetch(url, { headers: HEADERS });
   const html = await res.text();
 
@@ -275,8 +275,8 @@ async function processVideos(videos, label) {
 // 메인
 // ─────────────────────────────────────────────────────────────
 async function cleanOldData() {
-  const cutoff = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
-  console.log(`🗑️  7일 경과 데이터 정리 중... (기준: ${cutoff.slice(0, 10)})`);
+  const cutoff = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000).toISOString();
+  console.log(`🗑️  14일 경과 데이터 정리 중... (기준: ${cutoff.slice(0, 10)})`);
   const { data: oldVideos } = await supabase
     .from("videos")
     .select("video_id")
