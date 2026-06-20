@@ -22,23 +22,24 @@ export async function POST(req: NextRequest) {
     const results = await checkFdaApproval();
     const smsText  = buildSmsMessage(results);
 
-    let smsSent = false;
-    let smsError: string | undefined;
+    const smsResults: { phone: string; ok: boolean; body?: unknown; error?: string }[] = [];
 
     if (smsText) {
       const phones = await getAdminPhones();
       if (phones.length > 0) {
         for (const phone of phones) {
           const r = await sendSMS(phone, smsText);
-          if (!r.ok) smsError = r.error;
-          else smsSent = true;
+          smsResults.push({ phone: phone.slice(0, -4) + "****", ok: r.ok, body: r.body, error: r.error });
         }
       } else {
-        smsError = "등록된 관리자 번호 없음";
+        smsResults.push({ phone: "-", ok: false, error: "등록된 관리자 번호 없음" });
       }
     }
 
-    return NextResponse.json({ results, smsText, smsSent, smsError });
+    const smsSent  = smsResults.some(r => r.ok);
+    const smsError = smsResults.find(r => !r.ok)?.error;
+
+    return NextResponse.json({ results, smsText, smsSent, smsError, smsResults });
   } catch (e) {
     return NextResponse.json({ error: e instanceof Error ? e.message : "Unknown error" }, { status: 500 });
   }
