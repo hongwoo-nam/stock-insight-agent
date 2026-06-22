@@ -4,6 +4,7 @@ import { YoutubeTranscript } from "youtube-transcript";
 import OpenAI from "openai";
 import { getSetting } from "@/lib/db/settings";
 import { logUsage } from "@/lib/db/usage";
+import { sendSMS } from "@/lib/sms";
 
 const HEADERS = {
   "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0.0.0 Safari/537.36",
@@ -191,13 +192,32 @@ export async function GET(req: NextRequest) {
   }
 
   const { count: totalChunks } = await supabase.from("transcript_chunks").select("*", { count: "exact", head: true });
+  const finishedAt = new Date().toISOString();
+
+  // 실행 결과 SMS 전송
+  const to = process.env.COOLSMS_TO;
+  let smsSent = false;
+  if (to) {
+    const kstTime = new Date().toLocaleString("ko-KR", { timeZone: "Asia/Seoul" });
+    const smsText = [
+      `[정보수집 크론 완료]`,
+      `시각: ${kstTime}`,
+      `수집 영상: ${toProcess.length}개 처리`,
+      `완료: ${done} / 자막없음: ${noTranscript} / 실패: ${failed}`,
+      `삭제(14일초과): ${oldVideos?.length ?? 0}개`,
+      `전체 청크: ${totalChunks ?? 0}개`,
+    ].join("\n");
+    const r = await sendSMS(to, smsText).catch(() => null);
+    smsSent = !!r?.ok;
+  }
 
   return NextResponse.json({
     startedAt,
-    finishedAt: new Date().toISOString(),
+    finishedAt,
     deleted: oldVideos?.length ?? 0,
     processed: toProcess.length,
     done, noTranscript, failed,
     totalChunks,
+    smsSent,
   });
 }

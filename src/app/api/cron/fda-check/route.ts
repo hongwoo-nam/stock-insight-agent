@@ -25,20 +25,19 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ error: "COOLSMS_TO 환경변수 누락" }, { status: 500 });
     }
 
-    let sentText: string | null = null;
-    let smsResult = null;
-
+    // 매 실행마다 결과 문자 전송
+    let sentText: string;
     if (smsText) {
-      // 승인 뉴스 감지 → 즉시 문자
       sentText = smsText;
-    } else if (isFinal) {
-      // 14:30 KST 마지막 체크에서 뉴스 없음 → 없음 안내 문자
-      sentText = `[HLB FDA 모니터링]\n오늘(${checkedAt.slice(0, 10)}) FDA 승인 관련 소식 없음.\n내일도 계속 모니터링합니다.`;
+    } else {
+      const runLabel = isFinal ? "14:30(최종)" : nowUtcHour === 15 ? "00:30" : "07:30";
+      const sourcesSummary = results
+        .map(r => `${r.source}: ${r.error ? "오류" : r.found ? "관련소식감지" : "이상없음"}`)
+        .join("\n");
+      sentText = `[HLB FDA 모니터링 ${runLabel}]\n승인 소식 없음.\n\n${sourcesSummary}\n확인: ${checkedAt}`;
     }
 
-    if (sentText) {
-      smsResult = await sendSMS(to, sentText);
-    }
+    const smsResult = await sendSMS(to, sentText);
 
     return NextResponse.json({
       checkedAt,
