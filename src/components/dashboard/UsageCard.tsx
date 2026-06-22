@@ -22,10 +22,17 @@ interface DbUsage {
   free_tier_mb: number;
 }
 
+interface VercelUsage {
+  plan: string;
+  projectName: string;
+  latestDeployment: { state: string; createdAt: string; url: string | null } | null;
+  monthlyDeployments: number;
+}
+
 interface UsageData {
   openai: { total: UsageStat; today: UsageStat } | null;
-  claude: { total: UsageStat; today: UsageStat; last_synced?: string } | null;
   db: DbUsage | null;
+  vercel: VercelUsage | null;
 }
 
 function fmt(n: number) {
@@ -147,35 +154,32 @@ export function UsageCard() {
           )}
         </div>
 
-        {/* Claude Code */}
+        {/* Vercel */}
         <div>
-          <div className="flex items-center justify-between mb-2">
-            <div className="flex items-center gap-1.5">
-              <div className="w-2 h-2 rounded-full bg-orange-500" />
-              <span className="text-xs font-semibold text-gray-700">Claude Code (개발)</span>
-            </div>
-            {data.claude?.last_synced && (
-              <span className="text-xs text-gray-400">동기화: {data.claude.last_synced}</span>
-            )}
+          <div className="flex items-center gap-1.5 mb-2">
+            <div className="w-2 h-2 rounded-full bg-black" />
+            <span className="text-xs font-semibold text-gray-700">Vercel</span>
           </div>
-          {data.claude ? (
+          {data.vercel ? (
             <div className="pl-3.5">
-              <StatRow label="비용 (추정)" today={fmtCost(data.claude.today.cost_usd)} total={fmtCost(data.claude.total.cost_usd)} />
-              <StatRow label="입력 토큰" today={fmt(data.claude.today.input_tokens)} total={fmt(data.claude.total.input_tokens)} />
-              <StatRow label="출력 토큰" today={fmt(data.claude.today.output_tokens)} total={fmt(data.claude.total.output_tokens)} />
-              <StatRow label="캐시 읽기" today={fmt(data.claude.today.cache_read_tokens ?? 0)} total={fmt(data.claude.total.cache_read_tokens ?? 0)} />
+              <DbRow label="플랜" value={data.vercel.plan.toUpperCase()} />
+              <DbRow label="이번달 배포" value={`${data.vercel.monthlyDeployments}회`} />
+              {data.vercel.latestDeployment && (
+                <>
+                  <DbRow
+                    label="최근 배포 상태"
+                    value={data.vercel.latestDeployment.state === "READY" ? "✅ 정상" : data.vercel.latestDeployment.state}
+                  />
+                  <DbRow label="배포 시각" value={data.vercel.latestDeployment.createdAt} />
+                </>
+              )}
             </div>
           ) : (
-            <div className="pl-3.5">
-              <p className="text-xs text-gray-400 mb-1">동기화된 데이터 없음</p>
-              <p className="text-xs text-gray-400 font-mono bg-gray-50 px-2 py-1 rounded">
-                node scripts/sync-claude-usage.mjs
-              </p>
-            </div>
+            <p className="text-xs text-gray-400 pl-3.5">VERCEL_TOKEN 환경변수 필요</p>
           )}
         </div>
 
-        <p className="text-xs text-gray-400">※ Claude Code 비용은 구독 기반 추정치 · DB 용량은 벡터 크기 기준 추정</p>
+        <p className="text-xs text-gray-400">※ DB 용량은 벡터 크기 기준 추정치</p>
       </CardContent>
     </Card>
   );
