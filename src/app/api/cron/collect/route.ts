@@ -21,6 +21,22 @@ const DEFAULT_CHANNELS = [
   { handle: "@kvnews", name: "한국경제TV" },
 ];
 
+// DART 공시 모니터링 종목 (종목코드: 회사명)
+const DART_COMPANIES: { corpCode: string; name: string }[] = [
+  { corpCode: "00064420", name: "HLB" },
+  { corpCode: "00126380", name: "삼성전자" },
+  { corpCode: "00164779", name: "SK하이닉스" },
+  { corpCode: "00131947", name: "셀트리온" },
+  { corpCode: "00293886", name: "NAVER" },
+];
+
+// 경제 뉴스 RSS 피드
+const NEWS_RSS_FEEDS = [
+  { url: "https://www.hankyung.com/feed/economy", name: "한국경제" },
+  { url: "https://rss.mt.co.kr/mt_eco_news.xml", name: "머니투데이" },
+  { url: "https://www.mk.co.kr/rss/30100041/", name: "매일경제" },
+];
+
 function isWithinOneWeek(text: string): boolean {
   if (!text) return false;
   if (/초 전|second/i.test(text)) return true;
@@ -101,6 +117,106 @@ function chunkTranscript(segments: { text: string; offset: number; duration: num
   }
   if (cur.length) chunks.push({ text: cur.map(s => s.text).join(" "), start_time: cur[0].offset, end_time: cur[cur.length - 1].offset + cur[cur.length - 1].duration });
   return chunks;
+}
+
+// 뉴스/공시를 video 레코드처럼 저장 (기존 RAG 파이프라인 재활용)
+async function storeTextAsChunks(
+  id: string,
+  title: string,
+  url: string,
+  text: string,
+  channelName: string,
+  openai: OpenAI,
+  supabase: ReturnType<typeof getSupabase>
+): Promise<"done" | "skip" | "failed"> {
+  if (!text || text.length < 50) return "skip";
+  try {
+    await supabase.from("videos").upsert(
+      { video_id: id, title, url, published_at: new Date().toISOString(), channel_name: channelName, duration: 0, transcript_status: "processing" },
+      { onConflict: "video_id" }
+    );
+    // 2000자 단위로 청크
+    const chunks: { text: string; start: number }[] = [];
+    for (let i = 0; i < text.length; i += 1800) {
+      chunks.push({ text: text.slice(i, i + 1800), start: i });
+    }
+    for (let i = 0; i < chunks.length; i += 20) {
+      const batch = chunks.slice(i, i + 20);
+      const embRes = await openai.embeddings.create({ model: "text-embedding-3-small", input: batch.map(c => c.text) });
+      void logUsage("embedding", "text-embedding-3-small", embRes.usage?.total_tokens ?? 0, 0);
+      const rows = batch.map((c, j) => ({
+        video_id: id, chunk_index: i + j, chunk_text: c.text,
+        start_time: c.start, end_time: c.start + c.text.length,
+        embedding: JSON.stringify(embRes.data[j].embedding),
+      }));
+      await supabase.from("transcript_chunks").upsert(rows, { onConflict: "video_id,chunk_index" });
+    }
+    await supabase.from("videos").update({ transcript_status: "done" }).eq("video_id", id);
+    return "done";
+  } catch {
+    return "failed";
+  }
+}
+
+async function fetchRssNews(): Promise<{ id: string; title: string; url: string; text: string; channelName: string }[]> {
+  const threeDaysAgo = Date.now() - 3 * 24 * 60 * 60 * 1000;
+  const items: { id: string; title: string; url: string; text: string; channelName: string }[] = [];
+
+  for (const feed of NEWS_RSS_FEEDS) {
+    try {
+      const res = await fetch(feed.url, { headers: HEADERS, signal: AbortSignal.timeout(10000) });
+      const xml = await res.text();
+      const entries = [...xml.matchAll(/<item>([\s\S]*?)<\/item>/g)];
+      for (const entry of entries.slice(0, 20)) {
+        const content = entry[1];
+        const titleM = content.match(/<title><!\[CDATA\[([^\]]+)\]\]><\/title>/) || content.match(/<title>([^<]+)<\/title>/);
+        const linkM = content.match(/<link>([^<]+)<\/link>/) || content.match(/<guid[^>]*>([^<]+)<\/guid>/);
+        const pubM = content.match(/<pubDate>([^<]+)<\/pubDate>/);
+        const descM = content.match(/<description><!\[CDATA\[([^\]]+)\]\]><\/description>/) || content.match(/<description>([^<]+)<\/description>/);
+
+        if (!titleM || !linkM) continue;
+        if (pubM) {
+          const pubTime = new Date(pubM[1]).getTime();
+          if (isNaN(pubTime) || pubTime < threeDaysAgo) continue;
+        }
+
+        const title = titleM[1].trim();
+        const url = linkM[1].trim();
+        const desc = descM ? descM[1].replace(/<[^>]+>/g, " ").trim() : "";
+        const id = `news_${Buffer.from(url).toString("base64").slice(0, 40)}`;
+        items.push({ id, title, url, text: `${title}\n\n${desc}`, channelName: feed.name });
+      }
+    } catch { /* 피드 오류 무시 */ }
+  }
+  return items;
+}
+
+async function fetchDartDisclosures(): Promise<{ id: string; title: string; url: string; text: string; channelName: string }[]> {
+  const dartKey = process.env.DART_API_KEY;
+  if (!dartKey) return [];
+
+  const items: { id: string; title: string; url: string; text: string; channelName: string }[] = [];
+  const threeDaysAgo = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000);
+  const bgnDe = threeDaysAgo.toISOString().slice(0, 10).replace(/-/g, "");
+  const endDe = new Date().toISOString().slice(0, 10).replace(/-/g, "");
+
+  for (const company of DART_COMPANIES) {
+    try {
+      const url = `https://opendart.fss.or.kr/api/list.json?crtfc_key=${dartKey}&corp_code=${company.corpCode}&bgn_de=${bgnDe}&end_de=${endDe}&page_no=1&page_count=20`;
+      const res = await fetch(url, { signal: AbortSignal.timeout(10000) });
+      const data = await res.json();
+      if (data.status !== "000" || !data.list) continue;
+
+      for (const item of data.list) {
+        const id = `dart_${item.rcept_no}`;
+        const title = `[${company.name} 공시] ${item.report_nm}`;
+        const discUrl = `https://dart.fss.or.kr/dsaf001/main.do?rcpNo=${item.rcept_no}`;
+        const text = `${title}\n제출인: ${item.flr_nm}\n접수일: ${item.rcept_dt}\n공시유형: ${item.report_nm}`;
+        items.push({ id, title, url: discUrl, text, channelName: "DART공시" });
+      }
+    } catch { /* DART 오류 무시 */ }
+  }
+  return items;
 }
 
 async function processVideo(
@@ -191,6 +307,25 @@ export async function GET(req: NextRequest) {
     await new Promise(r => setTimeout(r, 300));
   }
 
+  // 뉴스 RSS + DART 공시 수집
+  const [newsItems, dartItems] = await Promise.all([fetchRssNews(), fetchDartDisclosures()]);
+  const extraItems = [...newsItems, ...dartItems];
+
+  // 기존 처리된 항목 제외
+  const { data: existingExtra } = await supabase
+    .from("videos").select("video_id, transcript_status")
+    .in("video_id", extraItems.map(i => i.id));
+  const existingExtraMap = Object.fromEntries((existingExtra ?? []).map(r => [r.video_id, r.transcript_status]));
+  const toProcessExtra = extraItems.filter(i => existingExtraMap[i.id] !== "done");
+
+  let newsDone = 0, newsFailed = 0;
+  for (const item of toProcessExtra) {
+    const status = await storeTextAsChunks(item.id, item.title, item.url, item.text, item.channelName, openai, supabase);
+    if (status === "done") newsDone++;
+    else if (status === "failed") newsFailed++;
+    await new Promise(r => setTimeout(r, 200));
+  }
+
   const { count: totalChunks } = await supabase.from("transcript_chunks").select("*", { count: "exact", head: true });
   const finishedAt = new Date().toISOString();
 
@@ -200,11 +335,10 @@ export async function GET(req: NextRequest) {
   if (to) {
     const kstTime = new Date().toLocaleString("ko-KR", { timeZone: "Asia/Seoul" });
     const smsText = [
-      `[정보수집 크론 완료]`,
-      `시각: ${kstTime}`,
-      `수집 영상: ${toProcess.length}개 처리`,
-      `완료: ${done} / 자막없음: ${noTranscript} / 실패: ${failed}`,
-      `삭제(14일초과): ${oldVideos?.length ?? 0}개`,
+      `[정보수집 완료] ${kstTime}`,
+      `영상: ${done}완료 / ${noTranscript}자막없음 / ${failed}실패`,
+      `뉴스+공시: ${newsDone}건 수집 / ${newsFailed}실패`,
+      `삭제(14일): ${oldVideos?.length ?? 0}개`,
       `전체 청크: ${totalChunks ?? 0}개`,
     ].join("\n");
     const r = await sendSMS(to, smsText).catch(() => null);
@@ -217,6 +351,7 @@ export async function GET(req: NextRequest) {
     deleted: oldVideos?.length ?? 0,
     processed: toProcess.length,
     done, noTranscript, failed,
+    newsDone, newsFailed,
     totalChunks,
     smsSent,
   });
