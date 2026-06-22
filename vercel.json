@@ -1,9 +1,1 @@
-{
-  "crons": [
-    { "path": "/api/cron/collect", "schedule": "0 22 * * *" },
-    { "path": "/api/cron/collect", "schedule": "30 3 * * *" },
-    { "path": "/api/cron/fda-check", "schedule": "30 15 * * *" },
-    { "path": "/api/cron/fda-check", "schedule": "30 22 * * *" },
-    { "path": "/api/cron/fda-check", "schedule": "30 5 * * *" }
-  ]
-}
+{}
