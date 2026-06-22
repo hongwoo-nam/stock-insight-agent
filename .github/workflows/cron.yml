@@ -12,34 +12,57 @@ on:
     - cron: "30 22 * * *"
     # FDA 체크 - 14:30 KST (05:30 UTC)
     - cron: "30 5 * * *"
-  workflow_dispatch: # 수동 실행 허용
+  workflow_dispatch:
+    inputs:
+      job:
+        description: "실행할 job (collect / fda-check / both)"
+        required: false
+        default: "both"
 
 jobs:
   collect:
     name: 정보 수집
-    if: |
+    runs-on: ubuntu-latest
+    if: >
       github.event.schedule == '0 22 * * *' ||
       github.event.schedule == '30 3 * * *' ||
       github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-latest
     steps:
-      - name: Run collect cron
+      - name: Call collect API
         run: |
-          curl -f -X GET \
+          echo "Calling collect API..."
+          HTTP_STATUS=$(curl -s -o /tmp/response.txt -w "%{http_code}" \
+            -X GET \
             -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
-            "https://stock-insight-agent.vercel.app/api/cron/collect"
+            --max-time 300 \
+            "https://stock-insight-agent.vercel.app/api/cron/collect")
+          echo "HTTP Status: $HTTP_STATUS"
+          echo "Response:"
+          cat /tmp/response.txt
+          if [ "$HTTP_STATUS" -lt 200 ] || [ "$HTTP_STATUS" -ge 300 ]; then
+            exit 1
+          fi
 
   fda-check:
     name: HLB FDA 체크
-    if: |
+    runs-on: ubuntu-latest
+    if: >
       github.event.schedule == '30 15 * * *' ||
       github.event.schedule == '30 22 * * *' ||
       github.event.schedule == '30 5 * * *' ||
       github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-latest
     steps:
-      - name: Run FDA check cron
+      - name: Call FDA check API
         run: |
-          curl -f -X GET \
+          echo "Calling FDA check API..."
+          HTTP_STATUS=$(curl -s -o /tmp/response.txt -w "%{http_code}" \
+            -X GET \
             -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
-            "https://stock-insight-agent.vercel.app/api/cron/fda-check"
+            --max-time 300 \
+            "https://stock-insight-agent.vercel.app/api/cron/fda-check")
+          echo "HTTP Status: $HTTP_STATUS"
+          echo "Response:"
+          cat /tmp/response.txt
+          if [ "$HTTP_STATUS" -lt 200 ] || [ "$HTTP_STATUS" -ge 300 ]; then
+            exit 1
+          fi
