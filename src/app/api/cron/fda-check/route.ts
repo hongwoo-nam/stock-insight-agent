@@ -11,8 +11,9 @@ export async function GET(req: NextRequest) {
     }
   }
 
-  // 14:30 KST 마지막 체크 여부 (뉴스 없어도 문자 전송)
-  const isFinal = req.nextUrl.searchParams.get("final") === "1";
+  // 14:30 KST = 05:30 UTC 실행 여부 판단 (뉴스 없어도 문자 전송)
+  const nowUtcHour = new Date().getUTCHours();
+  const isFinal = nowUtcHour === 5;
   const checkedAt = new Date().toLocaleString("ko-KR", { timeZone: "Asia/Seoul" });
 
   try {
