@@ -2,17 +2,6 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireAuth, isNextResponse } from "@/lib/auth/guard";
 import { checkFdaApproval, buildSmsMessage } from "@/lib/fda/hlb-monitor";
 import { sendSMS } from "@/lib/sms";
-import { getSupabase } from "@/lib/db/client";
-
-async function getAdminPhones(): Promise<string[]> {
-  const { data } = await getSupabase()
-    .from("members")
-    .select("phone")
-    .eq("role", "ADMIN")
-    .eq("use_yn", "Y")
-    .eq("del_yn", "N");
-  return (data ?? []).map(m => m.phone).filter(Boolean);
-}
 
 export async function POST(req: NextRequest) {
   const auth = await requireAuth(req);
@@ -20,19 +9,17 @@ export async function POST(req: NextRequest) {
 
   try {
     const results = await checkFdaApproval();
-    const smsText  = buildSmsMessage(results);
+    const smsText = buildSmsMessage(results);
 
     const smsResults: { phone: string; ok: boolean; body?: unknown; error?: string }[] = [];
 
     if (smsText) {
-      const phones = await getAdminPhones();
-      if (phones.length > 0) {
-        for (const phone of phones) {
-          const r = await sendSMS(phone, smsText);
-          smsResults.push({ phone: phone.slice(0, -4) + "****", ok: r.ok, body: r.body, error: r.error });
-        }
+      const to = process.env.COOLSMS_TO;
+      if (to) {
+        const r = await sendSMS(to, smsText);
+        smsResults.push({ phone: to.slice(0, -4) + "****", ok: r.ok, body: r.body, error: r.error });
       } else {
-        smsResults.push({ phone: "-", ok: false, error: "등록된 관리자 번호 없음" });
+        smsResults.push({ phone: "-", ok: false, error: "COOLSMS_TO 환경변수가 설정되지 않았습니다." });
       }
     }
 

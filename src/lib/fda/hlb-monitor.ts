@@ -19,16 +19,25 @@ const DRUG_TARGETS = [
   },
 ];
 
+// FDA 최종 승인 뉴스에만 나타나는 표현
 const APPROVAL_KEYWORDS = [
-  "approved", "approval", "FDA approves", "grants approval",
-  "승인", "FDA 승인", "허가", "신약 승인",
-  "Complete Response Letter", "CRL",  // 거절 신호도 중요
-  "PDUFA", "action date",
+  "FDA approves", "FDA approved", "grants approval", "approved by the FDA",
+  "new drug application approved", "NDA approved", "BLA approved",
+  "FDA 승인", "신약 승인", "허가 승인",
 ];
 
 const REJECTION_KEYWORDS = [
   "Complete Response Letter", "CRL", "not approved", "refuse to file",
   "거절", "반려", "승인 거부",
+];
+
+// 이 키워드가 승인 키워드 근처에 있으면 오탐으로 제외
+const FALSE_POSITIVE_KEYWORDS = [
+  "resubmission", "re-submission", "accepts filing", "accepted the filing",
+  "filing acceptance", "accepted for filing", "filing accepted",
+  "accepts the resubmission", "accepted the resubmission",
+  "under review", "under fda review", "pdufa date", "pdufa goal date",
+  "seeking approval", "submitted", "submission accepted",
 ];
 
 const SOURCES = [
@@ -76,16 +85,43 @@ export interface FdaCheckResult {
   error?: string;
 }
 
-async function fetchText(url: string): Promise<string> {
-  const res = await fetch(url, { headers: HEADERS, signal: AbortSignal.timeout(15000) });
-  const html = await res.text();
-  // HTML 태그 제거, 공백 정리
+function stripHtml(html: string): string {
   return html
     .replace(/<script[\s\S]*?<\/script>/gi, " ")
     .replace(/<style[\s\S]*?<\/style>/gi, " ")
     .replace(/<[^>]+>/g, " ")
     .replace(/\s{2,}/g, " ")
-    .slice(0, 50000); // 최대 50KB
+    .slice(0, 50000);
+}
+
+// HLB 사이트는 self-signed 인증서 → Node.js https 모듈로 직접 요청
+function fetchHlbText(url: string): Promise<string> {
+  return new Promise(async (resolve, reject) => {
+    const https = await import("https");
+    const urlObj = new URL(url);
+    const options = {
+      hostname: urlObj.hostname,
+      path: urlObj.pathname + urlObj.search,
+      method: "GET",
+      rejectUnauthorized: false,
+      headers: HEADERS,
+      timeout: 15000,
+    };
+    const req = https.request(options, (res) => {
+      const chunks: Buffer[] = [];
+      res.on("data", (c: Buffer) => chunks.push(c));
+      res.on("end", () => resolve(stripHtml(Buffer.concat(chunks).toString("utf-8"))));
+    });
+    req.on("error", reject);
+    req.on("timeout", () => { req.destroy(); reject(new Error("timeout")); });
+    req.end();
+  });
+}
+
+async function fetchText(url: string): Promise<string> {
+  if (url.includes("hlb.co.kr")) return fetchHlbText(url);
+  const res = await fetch(url, { headers: HEADERS, signal: AbortSignal.timeout(15000) });
+  return stripHtml(await res.text());
 }
 
 function extractSnippet(text: string, keyword: string, radius = 200): string {
@@ -114,32 +150,54 @@ export async function checkFdaApproval(): Promise<FdaCheckResult[]> {
     }
 
     const textLower = text.toLowerCase();
+    const PROXIMITY = 600; // 약품명과 승인 키워드가 이 글자 수 이내에 있어야 함
 
-    // 관련 키워드 탐지 (약품명 + 승인 키워드 동시)
-    const drugHit = DRUG_TARGETS.some(d =>
-      d.keywords.some(kw => textLower.includes(kw.toLowerCase()))
-    );
-    const approvalHit = APPROVAL_KEYWORDS.some(kw => textLower.includes(kw.toLowerCase()));
-    const rejectionHit = REJECTION_KEYWORDS.some(kw => textLower.includes(kw.toLowerCase()));
-
-    const found = drugHit && approvalHit;
-    const matchedKeywords: string[] = [];
-
-    if (found) {
-      DRUG_TARGETS.forEach(d =>
-        d.keywords.forEach(kw => { if (textLower.includes(kw.toLowerCase())) matchedKeywords.push(kw); })
-      );
-      APPROVAL_KEYWORDS.forEach(kw => { if (textLower.includes(kw.toLowerCase())) matchedKeywords.push(kw); });
+    // 약품명 위치 수집
+    const drugPositions: { kw: string; idx: number }[] = [];
+    for (const d of DRUG_TARGETS) {
+      for (const kw of d.keywords) {
+        let idx = textLower.indexOf(kw.toLowerCase());
+        while (idx !== -1) {
+          drugPositions.push({ kw, idx });
+          idx = textLower.indexOf(kw.toLowerCase(), idx + 1);
+        }
+      }
     }
 
-    // 첫 번째 매칭 키워드 스니펫
-    const snippet = found
-      ? extractSnippet(text, matchedKeywords[0] ?? "approved")
+    // 승인/거절 키워드와 약품명이 PROXIMITY 이내에 있는지 확인, 오탐 키워드가 같은 구간에 없는지 검증
+    let found = false;
+    let rejectionHit = false;
+    const matchedKeywords: string[] = [];
+    let snippetStart = -1;
+
+    const allSignalKws = [...APPROVAL_KEYWORDS, ...REJECTION_KEYWORDS];
+    for (const sigKw of allSignalKws) {
+      const sigIdx = textLower.indexOf(sigKw.toLowerCase());
+      if (sigIdx === -1) continue;
+
+      for (const { kw: drugKw, idx: drugIdx } of drugPositions) {
+        if (Math.abs(sigIdx - drugIdx) > PROXIMITY) continue;
+
+        // 해당 구간에 오탐 키워드가 있으면 건너뜀
+        const segStart = Math.min(sigIdx, drugIdx) - 100;
+        const segEnd   = Math.max(sigIdx, drugIdx) + sigKw.length + 100;
+        const segment  = textLower.slice(Math.max(0, segStart), segEnd);
+        const isFalsePositive = FALSE_POSITIVE_KEYWORDS.some(fp => segment.includes(fp.toLowerCase()));
+        if (isFalsePositive) continue;
+
+        found = true;
+        if (!matchedKeywords.includes(drugKw)) matchedKeywords.push(drugKw);
+        if (!matchedKeywords.includes(sigKw)) matchedKeywords.push(sigKw);
+        if (snippetStart === -1) snippetStart = Math.min(sigIdx, drugIdx);
+        if (REJECTION_KEYWORDS.some(r => r.toLowerCase() === sigKw.toLowerCase())) rejectionHit = true;
+      }
+    }
+
+    const snippet = found && snippetStart !== -1
+      ? "..." + text.slice(Math.max(0, snippetStart - 100), snippetStart + 400) + "..."
       : "";
 
-    const approved = found
-      ? (rejectionHit ? false : true)
-      : null;
+    const approved = found ? (rejectionHit ? false : true) : null;
 
     results.push({ source: source.name, url: source.url, found, approved, matchedKeywords: [...new Set(matchedKeywords)], snippet, checkedAt });
   }

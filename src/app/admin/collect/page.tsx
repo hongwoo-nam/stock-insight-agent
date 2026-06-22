@@ -38,6 +38,8 @@ export default function CollectPage() {
   const [fdaResults, setFdaResults] = useState<FdaResult[] | null>(null);
   const [fdaLoading, setFdaLoading] = useState(false);
   const [fdaSmsText, setFdaSmsText] = useState<string | null>(null);
+  const [fdaSmsSent, setFdaSmsSent] = useState<boolean | null>(null);
+  const [fdaSmsError, setFdaSmsError] = useState<string | null>(null);
 
   useEffect(() => {
     logRef.current?.scrollTo({ top: logRef.current.scrollHeight, behavior: "smooth" });
@@ -108,11 +110,15 @@ export default function CollectPage() {
     setFdaLoading(true);
     setFdaResults(null);
     setFdaSmsText(null);
+    setFdaSmsSent(null);
+    setFdaSmsError(null);
     try {
       const res = await fetch("/api/admin/fda-check", { method: "POST" });
       const data = await res.json();
       setFdaResults(data.results ?? []);
       setFdaSmsText(data.smsText ?? null);
+      setFdaSmsSent(data.smsSent ?? null);
+      setFdaSmsError(data.smsError ?? null);
     } catch (e) {
       setFdaResults([]);
     } finally {
@@ -378,7 +384,17 @@ export default function CollectPage() {
 
           {fdaSmsText && (
             <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-xl">
-              <p className="text-xs font-semibold text-red-700 mb-1">🚨 관련 소식 감지 — SMS 전송됨</p>
+              <p className="text-xs font-semibold text-red-700 mb-1">
+                🚨 관련 소식 감지 —{" "}
+                {fdaSmsSent === true
+                  ? "✅ SMS 전송됨"
+                  : fdaSmsSent === false
+                  ? "❌ SMS 전송 실패"
+                  : "SMS 미전송 (소식 없음)"}
+              </p>
+              {fdaSmsError && (
+                <p className="text-xs text-red-500 mb-1">오류: {fdaSmsError}</p>
+              )}
               <pre className="text-xs text-red-800 whitespace-pre-wrap">{fdaSmsText}</pre>
             </div>
           )}
