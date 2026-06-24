@@ -31,6 +31,31 @@ const REJECTION_KEYWORDS = [
   "거절", "반려", "승인 거부",
 ];
 
+// CMC 실사 / 제조 이슈 키워드 (항서제약 포함)
+const CMC_KEYWORDS = [
+  "CMC", "Chemistry, Manufacturing and Controls",
+  "pre-approval inspection", "PAI",
+  "manufacturing inspection", "facility inspection", "GMP inspection",
+  "manufacturing deficiency", "manufacturing concern", "manufacturing issue",
+  "Hengrui", "항서제약",
+];
+
+// CMC 이슈로 판단하려면 약품명과 함께 있어야 하는 추가 트리거
+const CMC_TRIGGER_KEYWORDS = [
+  "inspection", "deficiency", "concern", "issue", "delay", "warning letter",
+  "실사", "GMP", "제조", "지연", "우려",
+];
+
+// FDA 승인 전 주요 이벤트 키워드
+const REGULATORY_EVENT_KEYWORDS = [
+  "Advisory Committee", "AdCom", "advisory panel",
+  "PDUFA goal date", "PDUFA target date", "action date extended",
+  "Complete Response", "information request", "information amendment",
+  "label negotiation", "labeling negotiation",
+  "inspection complete", "inspection passed", "inspection cleared",
+  "승인 지연", "심사 지연", "자문위원회",
+];
+
 // 이 키워드가 승인 키워드 근처에 있으면 오탐으로 제외
 const FALSE_POSITIVE_KEYWORDS = [
   "resubmission", "re-submission", "accepts filing", "accepted the filing",
@@ -79,6 +104,7 @@ export interface FdaCheckResult {
   url: string;
   found: boolean;
   approved: boolean | null; // true=승인, false=거절, null=관련없음
+  issueType: "approval" | "rejection" | "cmc" | "regulatory" | "general" | null;
   matchedKeywords: string[];
   snippet: string;
   checkedAt: string;
@@ -145,7 +171,7 @@ export async function checkFdaApproval(): Promise<FdaCheckResult[]> {
     }
 
     if (error || !text) {
-      results.push({ source: source.name, url: source.url, found: false, approved: null, matchedKeywords: [], snippet: "", checkedAt, error });
+      results.push({ source: source.name, url: source.url, found: false, approved: null, issueType: null, matchedKeywords: [], snippet: "", checkedAt, error });
       continue;
     }
 
@@ -164,9 +190,11 @@ export async function checkFdaApproval(): Promise<FdaCheckResult[]> {
       }
     }
 
-    // 승인/거절 키워드와 약품명이 PROXIMITY 이내에 있는지 확인, 오탐 키워드가 같은 구간에 없는지 검증
+    // 승인/거절 키워드 탐지
     let found = false;
     let rejectionHit = false;
+    let cmcHit = false;
+    let regulatoryHit = false;
     const matchedKeywords: string[] = [];
     let snippetStart = -1;
 
@@ -178,7 +206,6 @@ export async function checkFdaApproval(): Promise<FdaCheckResult[]> {
       for (const { kw: drugKw, idx: drugIdx } of drugPositions) {
         if (Math.abs(sigIdx - drugIdx) > PROXIMITY) continue;
 
-        // 해당 구간에 오탐 키워드가 있으면 건너뜀
         const segStart = Math.min(sigIdx, drugIdx) - 100;
         const segEnd   = Math.max(sigIdx, drugIdx) + sigKw.length + 100;
         const segment  = textLower.slice(Math.max(0, segStart), segEnd);
@@ -193,13 +220,48 @@ export async function checkFdaApproval(): Promise<FdaCheckResult[]> {
       }
     }
 
+    // CMC 실사 / 항서제약 이슈 탐지 (약품명 근처 + 추가 트리거 필요)
+    for (const cmcKw of CMC_KEYWORDS) {
+      const cmcIdx = textLower.indexOf(cmcKw.toLowerCase());
+      if (cmcIdx === -1) continue;
+      for (const { idx: drugIdx } of drugPositions) {
+        if (Math.abs(cmcIdx - drugIdx) > PROXIMITY) continue;
+        const segment = textLower.slice(Math.max(0, cmcIdx - 200), cmcIdx + 300);
+        const hasTrigger = CMC_TRIGGER_KEYWORDS.some(t => segment.includes(t.toLowerCase()));
+        if (!hasTrigger) continue;
+        cmcHit = true;
+        if (!matchedKeywords.includes(cmcKw)) matchedKeywords.push(cmcKw);
+        if (snippetStart === -1) snippetStart = cmcIdx;
+        found = true;
+      }
+    }
+
+    // FDA 승인 전 규제 이벤트 탐지 (약품명 근처)
+    for (const regKw of REGULATORY_EVENT_KEYWORDS) {
+      const regIdx = textLower.indexOf(regKw.toLowerCase());
+      if (regIdx === -1) continue;
+      for (const { idx: drugIdx } of drugPositions) {
+        if (Math.abs(regIdx - drugIdx) > PROXIMITY) continue;
+        regulatoryHit = true;
+        if (!matchedKeywords.includes(regKw)) matchedKeywords.push(regKw);
+        if (snippetStart === -1) snippetStart = regIdx;
+        found = true;
+      }
+    }
+
     const snippet = found && snippetStart !== -1
       ? "..." + text.slice(Math.max(0, snippetStart - 100), snippetStart + 400) + "..."
       : "";
 
-    const approved = found ? (rejectionHit ? false : true) : null;
+    const approved = !found ? null : rejectionHit ? false : (!cmcHit && !regulatoryHit) ? true : null;
+    const issueType = !found ? null
+      : rejectionHit ? "rejection"
+      : cmcHit ? "cmc"
+      : regulatoryHit ? "regulatory"
+      : approved === true ? "approval"
+      : "general";
 
-    results.push({ source: source.name, url: source.url, found, approved, matchedKeywords: [...new Set(matchedKeywords)], snippet, checkedAt });
+    results.push({ source: source.name, url: source.url, found, approved, issueType, matchedKeywords: [...new Set(matchedKeywords)], snippet, checkedAt });
   }
 
   return results;
@@ -209,23 +271,39 @@ export function buildSmsMessage(results: FdaCheckResult[]): string | null {
   const hits = results.filter(r => r.found);
   if (hits.length === 0) return null;
 
-  const approvals  = hits.filter(r => r.approved === true);
-  const rejections = hits.filter(r => r.approved === false);
+  const approvals   = hits.filter(r => r.issueType === "approval");
+  const rejections  = hits.filter(r => r.issueType === "rejection");
+  const cmcIssues   = hits.filter(r => r.issueType === "cmc");
+  const regEvents   = hits.filter(r => r.issueType === "regulatory");
+  const generals    = hits.filter(r => r.issueType === "general");
 
-  let msg = "[HLB FDA 알림]\n";
+  const kst = new Date().toLocaleString("ko-KR", { timeZone: "Asia/Seoul" });
+  let msg = `[HLB FDA 알림] ${kst}\n`;
 
   if (approvals.length > 0) {
-    msg += "🎉 FDA 승인 감지!\n";
-    msg += approvals.map(r => `- ${r.source}`).join("\n") + "\n";
-    msg += `키워드: ${approvals[0].matchedKeywords.slice(0, 3).join(", ")}\n`;
-  } else if (rejections.length > 0) {
-    msg += "⚠️ CRL(거절) 또는 관련 소식 감지\n";
-    msg += rejections.map(r => `- ${r.source}`).join("\n") + "\n";
-  } else {
-    msg += "📋 FDA 관련 소식 감지\n";
-    msg += hits.map(r => `- ${r.source}`).join("\n") + "\n";
+    msg += "\n🎉 FDA 최종 승인 감지!\n";
+    msg += approvals.map(r => `  - ${r.source}\n    ${r.matchedKeywords.slice(0, 2).join(", ")}`).join("\n") + "\n";
   }
 
-  msg += `확인: ${new Date().toLocaleString("ko-KR", { timeZone: "Asia/Seoul" })}`;
-  return msg.slice(0, 2000); // SMS 길이 제한
+  if (rejections.length > 0) {
+    msg += "\n🚨 거절(CRL) 감지!\n";
+    msg += rejections.map(r => `  - ${r.source}\n    ${r.matchedKeywords.slice(0, 2).join(", ")}`).join("\n") + "\n";
+  }
+
+  if (cmcIssues.length > 0) {
+    msg += "\n⚠️ CMC/제조 실사 이슈 감지\n";
+    msg += cmcIssues.map(r => `  - ${r.source}\n    ${r.matchedKeywords.slice(0, 3).join(", ")}`).join("\n") + "\n";
+  }
+
+  if (regEvents.length > 0) {
+    msg += "\n📋 FDA 심사 관련 이벤트\n";
+    msg += regEvents.map(r => `  - ${r.source}\n    ${r.matchedKeywords.slice(0, 2).join(", ")}`).join("\n") + "\n";
+  }
+
+  if (generals.length > 0) {
+    msg += "\n📌 기타 관련 소식\n";
+    msg += generals.map(r => `  - ${r.source}`).join("\n") + "\n";
+  }
+
+  return msg.slice(0, 2000);
 }
