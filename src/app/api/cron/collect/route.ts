@@ -219,6 +219,48 @@ async function fetchDartDisclosures(): Promise<{ id: string; title: string; url:
   return items;
 }
 
+// 수집된 뉴스/공시에서 주요 이슈 요약 생성
+async function generateIssueSummary(
+  items: { title: string; text: string; channelName: string }[],
+  openai: OpenAI
+): Promise<string | null> {
+  if (items.length === 0) return null;
+
+  const inputText = items
+    .slice(0, 30) // 최대 30건
+    .map(i => `[${i.channelName}] ${i.title}\n${i.text.slice(0, 300)}`)
+    .join("\n\n---\n\n");
+
+  try {
+    const completion = await openai.chat.completions.create({
+      model: "gpt-4o-mini",
+      temperature: 0.2,
+      max_tokens: 600,
+      messages: [
+        {
+          role: "system",
+          content: `당신은 주식 투자 정보를 간결하게 요약하는 AI입니다.
+아래 규칙을 반드시 지켜서 SMS용 요약문을 작성하세요:
+- 실적, 자사주 매입, ADR 상장, 유상증자, 주요 계약, 기관/외국인 매매, 주가 급등락 이슈만 추출
+- 관련 없는 일반 뉴스는 제외
+- 종목명과 핵심 수치(금액, %, 날짜)를 반드시 포함
+- 전체 600자 이내
+- 형식: 종목 [이슈유형] 핵심내용 (예: 삼성전자 [실적] 2Q 영업이익 10조원, 전년比 +50%)
+- 이슈가 없으면 "주요 이슈 없음"으로만 답변`,
+        },
+        {
+          role: "user",
+          content: `최근 2~3일 수집된 뉴스/공시입니다. 주요 이슈를 요약해주세요:\n\n${inputText}`,
+        },
+      ],
+    });
+    void logUsage("chat", "gpt-4o-mini", completion.usage?.prompt_tokens ?? 0, completion.usage?.completion_tokens ?? 0);
+    return completion.choices[0].message.content?.trim() ?? null;
+  } catch {
+    return null;
+  }
+}
+
 async function processVideo(
   video: { video_id: string; title: string; url: string; published_at: string; channel_name: string },
   openai: OpenAI,
@@ -326,21 +368,31 @@ export async function GET(req: NextRequest) {
     await new Promise(r => setTimeout(r, 200));
   }
 
+  // 수집된 뉴스/공시 기반 주요 이슈 요약 (새로 수집된 항목 우선)
+  const issueSummary = await generateIssueSummary(
+    [...newsItems, ...dartItems].map(i => ({ title: i.title, text: i.text, channelName: i.channelName })),
+    openai
+  ).catch(() => null);
+
   const { count: totalChunks } = await supabase.from("transcript_chunks").select("*", { count: "exact", head: true });
   const finishedAt = new Date().toISOString();
 
-  // 실행 결과 SMS 전송
+  // 실행 결과 + 이슈 요약 SMS 전송
   const to = process.env.COOLSMS_TO;
   let smsSent = false;
   if (to) {
     const kstTime = new Date().toLocaleString("ko-KR", { timeZone: "Asia/Seoul" });
-    const smsText = [
+    const lines = [
       `[정보수집 완료] ${kstTime}`,
-      `영상: ${done}완료 / ${noTranscript}자막없음 / ${failed}실패`,
-      `뉴스+공시: ${newsDone}건 수집 / ${newsFailed}실패`,
-      `삭제(14일): ${oldVideos?.length ?? 0}개`,
-      `전체 청크: ${totalChunks ?? 0}개`,
-    ].join("\n");
+      `영상 ${done}완료 / 뉴스+공시 ${newsDone}건`,
+    ];
+    if (issueSummary && issueSummary !== "주요 이슈 없음") {
+      lines.push(`\n📌 최근 주요 이슈`);
+      lines.push(issueSummary);
+    } else {
+      lines.push("주요 이슈 없음");
+    }
+    const smsText = lines.join("\n").slice(0, 2000);
     const r = await sendSMS(to, smsText).catch(() => null);
     smsSent = !!r?.ok;
   }
