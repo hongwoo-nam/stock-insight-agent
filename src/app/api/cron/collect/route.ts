@@ -21,13 +21,13 @@ const DEFAULT_CHANNELS = [
   { handle: "@kvnews", name: "한국경제TV" },
 ];
 
-// DART 공시 모니터링 종목 (종목코드: 회사명)
-const DART_COMPANIES: { corpCode: string; name: string }[] = [
-  { corpCode: "00064420", name: "HLB" },
-  { corpCode: "00126380", name: "삼성전자" },
-  { corpCode: "00164779", name: "SK하이닉스" },
-  { corpCode: "00131947", name: "셀트리온" },
-  { corpCode: "00293886", name: "NAVER" },
+// DART 공시 모니터링 종목
+const DART_COMPANIES: { corpCode: string; name: string; stockCode: string }[] = [
+  { corpCode: "00064420", name: "HLB",    stockCode: "028300" },
+  { corpCode: "00126380", name: "삼성전자", stockCode: "005930" },
+  { corpCode: "00164779", name: "SK하이닉스", stockCode: "000660" },
+  { corpCode: "00131947", name: "셀트리온", stockCode: "068270" },
+  { corpCode: "00293886", name: "NAVER",  stockCode: "035420" },
 ];
 
 // 경제 뉴스 RSS 피드
@@ -35,6 +35,18 @@ const NEWS_RSS_FEEDS = [
   { url: "https://www.hankyung.com/feed/economy", name: "한국경제" },
   { url: "https://rss.mt.co.kr/mt_eco_news.xml", name: "머니투데이" },
   { url: "https://www.mk.co.kr/rss/30100041/", name: "매일경제" },
+  { url: "https://www.etnews.com/rss/section/etnews_02.xml", name: "전자신문" },
+  { url: "https://rss.edaily.co.kr/edaily_stock.xml", name: "이데일리" },
+];
+
+// 네이버 뉴스 검색 키워드 (주가 모멘텀 이슈 중심)
+const NAVER_NEWS_KEYWORDS = [
+  "삼성전자 자사주", "삼성전자 실적", "삼성전자 배당",
+  "SK하이닉스 실적", "SK하이닉스 HBM",
+  "HLB FDA", "HLB 임상",
+  "셀트리온 실적", "셀트리온 자사주",
+  "NAVER 실적", "NAVER 자사주",
+  "삼성전자 ADR", "코스피 외국인",
 ];
 
 function isWithinOneWeek(text: string): boolean {
@@ -156,6 +168,77 @@ async function storeTextAsChunks(
   } catch {
     return "failed";
   }
+}
+
+// 네이버 금융 종목별 뉴스 수집
+async function fetchNaverStockNews(): Promise<{ id: string; title: string; url: string; text: string; channelName: string }[]> {
+  const threeDaysAgo = Date.now() - 3 * 24 * 60 * 60 * 1000;
+  const items: { id: string; title: string; url: string; text: string; channelName: string }[] = [];
+
+  for (const company of DART_COMPANIES) {
+    try {
+      const url = `https://finance.naver.com/item/news.naver?code=${company.stockCode}&page=1`;
+      const res = await fetch(url, { headers: { ...HEADERS, "Accept": "text/html" }, signal: AbortSignal.timeout(10000) });
+      const html = await res.text();
+
+      // 뉴스 항목 파싱
+      const rows = [...html.matchAll(/<tr class="[^"]*">([\s\S]*?)<\/tr>/g)];
+      for (const row of rows.slice(0, 20)) {
+        const content = row[1];
+        const titleM = content.match(/<a[^>]*title="([^"]+)"/);
+        const linkM = content.match(/href="(\/item\/news_read[^"]+)"/);
+        const dateM = content.match(/(\d{4}\.\d{2}\.\d{2}\s+\d{2}:\d{2})/);
+
+        if (!titleM || !linkM) continue;
+        if (dateM) {
+          const pubTime = new Date(dateM[1].replace(/\./g, "-").replace(" ", "T")).getTime();
+          if (!isNaN(pubTime) && pubTime < threeDaysAgo) continue;
+        }
+
+        const title = titleM[1].trim();
+        const articleUrl = `https://finance.naver.com${linkM[1]}`;
+        const id = `naver_stock_${company.stockCode}_${Buffer.from(title).toString("base64").slice(0, 20)}`;
+        items.push({
+          id,
+          title: `[${company.name}] ${title}`,
+          url: articleUrl,
+          text: `[${company.name} 종목뉴스] ${title}`,
+          channelName: `네이버금융_${company.name}`,
+        });
+      }
+    } catch { /* 오류 무시 */ }
+  }
+  return items;
+}
+
+// 네이버 뉴스 키워드 검색 (최신순)
+async function fetchNaverNewsSearch(): Promise<{ id: string; title: string; url: string; text: string; channelName: string }[]> {
+  const items: { id: string; title: string; url: string; text: string; channelName: string }[] = [];
+
+  for (const keyword of NAVER_NEWS_KEYWORDS) {
+    try {
+      const url = `https://search.naver.com/search.naver?where=news&query=${encodeURIComponent(keyword)}&sort=1&nso=so:dd,p:3d`;
+      const res = await fetch(url, { headers: HEADERS, signal: AbortSignal.timeout(10000) });
+      const html = await res.text();
+
+      // 뉴스 제목 파싱
+      const matches = [...html.matchAll(/<a[^>]+class="news_tit"[^>]+href="([^"]+)"[^>]+title="([^"]+)"/g)];
+      for (const m of matches.slice(0, 5)) {
+        const articleUrl = m[1];
+        const title = m[2].trim();
+        const id = `naver_search_${Buffer.from(keyword + title).toString("base64").slice(0, 30)}`;
+        items.push({
+          id,
+          title,
+          url: articleUrl,
+          text: `[검색: ${keyword}] ${title}`,
+          channelName: "네이버뉴스검색",
+        });
+      }
+    } catch { /* 오류 무시 */ }
+    await new Promise(r => setTimeout(r, 200)); // 요청 간격
+  }
+  return items;
 }
 
 async function fetchRssNews(): Promise<{ id: string; title: string; url: string; text: string; channelName: string }[]> {
@@ -349,9 +432,14 @@ export async function GET(req: NextRequest) {
     await new Promise(r => setTimeout(r, 300));
   }
 
-  // 뉴스 RSS + DART 공시 수집
-  const [newsItems, dartItems] = await Promise.all([fetchRssNews(), fetchDartDisclosures()]);
-  const extraItems = [...newsItems, ...dartItems];
+  // 뉴스 RSS + 네이버 종목뉴스 + 네이버 뉴스검색 + DART 공시 수집
+  const [newsItems, naverStockItems, naverSearchItems, dartItems] = await Promise.all([
+    fetchRssNews(),
+    fetchNaverStockNews(),
+    fetchNaverNewsSearch(),
+    fetchDartDisclosures(),
+  ]);
+  const extraItems = [...newsItems, ...naverStockItems, ...naverSearchItems, ...dartItems];
 
   // 기존 처리된 항목 제외
   const { data: existingExtra } = await supabase
@@ -368,9 +456,10 @@ export async function GET(req: NextRequest) {
     await new Promise(r => setTimeout(r, 200));
   }
 
-  // 수집된 뉴스/공시 기반 주요 이슈 요약 (새로 수집된 항목 우선)
+  // 수집된 전체 뉴스/공시 기반 주요 이슈 요약
   const issueSummary = await generateIssueSummary(
-    [...newsItems, ...dartItems].map(i => ({ title: i.title, text: i.text, channelName: i.channelName })),
+    [...naverStockItems, ...naverSearchItems, ...dartItems, ...newsItems]
+      .map(i => ({ title: i.title, text: i.text, channelName: i.channelName })),
     openai
   ).catch(() => null);
 
@@ -384,7 +473,7 @@ export async function GET(req: NextRequest) {
     const kstTime = new Date().toLocaleString("ko-KR", { timeZone: "Asia/Seoul" });
     const lines = [
       `[정보수집 완료] ${kstTime}`,
-      `영상 ${done}완료 / 뉴스+공시 ${newsDone}건`,
+      `영상 ${done}완료 / 뉴스+공시 ${newsDone}건 (네이버 ${naverStockItems.length + naverSearchItems.length}건 포함)`,
     ];
     if (issueSummary && issueSummary !== "주요 이슈 없음") {
       lines.push(`\n📌 최근 주요 이슈`);
