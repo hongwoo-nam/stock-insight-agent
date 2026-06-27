@@ -16,10 +16,6 @@ const DEFAULT_KEYWORDS = [
   "셀트리온 주식", "네이버 주식", "금리인상", "미국 이란 전쟁",
 ];
 
-const DEFAULT_CHANNELS = [
-  { handle: "@syukaworld", name: "슈카월드" },
-  { handle: "@kvnews", name: "한국경제TV" },
-];
 
 // DART 공시 모니터링 종목
 const DART_COMPANIES: { corpCode: string; name: string; stockCode: string }[] = [
@@ -49,87 +45,55 @@ const GOOGLE_NEWS_KEYWORDS = [
   "코스피 외국인 매수", "코스피 자사주",
 ];
 
-function isWithinOneWeek(text: string): boolean {
-  if (!text) return false;
-  if (/초 전|second/i.test(text)) return true;
-  if (/분 전|minute/i.test(text)) return true;
-  if (/시간 전|hour/i.test(text)) return true;
-  const d = text.match(/(\d+)\s*(일 전|day)/i);
-  if (d && parseInt(d[1]) <= 7) return true;
-  if (/1주 전|1 week/i.test(text)) return true;
-  return false;
-}
+type YTVideo = { video_id: string; title: string; url: string; published_at: string; channel_name: string; description: string };
 
-async function searchYouTube(keyword: string) {
-  const url = `https://www.youtube.com/results?search_query=${encodeURIComponent(keyword)}&sp=EgQIAxAB&gl=KR&hl=ko`;
-  const res = await fetch(url, { headers: HEADERS });
-  const html = await res.text();
-  const idx = html.indexOf("var ytInitialData = ");
-  const endIdx = html.indexOf(";</script>", idx);
-  if (idx < 0 || endIdx < 0) return [];
-  let data: Record<string, unknown>;
-  try { data = JSON.parse(html.slice(idx + 20, endIdx)); } catch { return []; }
-
-  const videos: { video_id: string; title: string; url: string; published_at: string; channel_name: string }[] = [];
-  const seen = new Set<string>();
-  function walk(obj: unknown): void {
-    if (!obj || typeof obj !== "object") return;
-    if (Array.isArray(obj)) { obj.forEach(walk); return; }
-    const o = obj as Record<string, unknown>;
-    if (o.videoRenderer) {
-      const vr = o.videoRenderer as Record<string, unknown>;
-      const videoId = vr.videoId as string;
-      if (!videoId || seen.has(videoId)) return;
-      seen.add(videoId);
-      const title = ((vr.title as Record<string, unknown>)?.runs as { text: string }[])?.[0]?.text || videoId;
-      const channelName = ((vr.ownerText as Record<string, unknown>)?.runs as { text: string }[])?.[0]?.text || "unknown";
-      const publishedText = (vr.publishedTimeText as Record<string, unknown>)?.simpleText as string || "";
-      if (!isWithinOneWeek(publishedText)) return;
-      videos.push({ video_id: videoId, title, url: `https://www.youtube.com/watch?v=${videoId}`, published_at: new Date().toISOString(), channel_name: channelName });
-      return;
-    }
-    Object.values(o).forEach(walk);
-  }
-  walk(data);
-  return videos.slice(0, 15);
-}
-
-async function getChannelId(handle: string) {
-  const res = await fetch(`https://www.youtube.com/${handle}`, { headers: HEADERS });
-  const html = await res.text();
-  return html.match(/"channelId":"(UC[^"]+)"/)?.[1] ?? null;
-}
-
-async function fetchChannelVideos(handle: string, channelName: string) {
-  const channelId = await getChannelId(handle);
-  if (!channelId) return [];
-  const rss = await fetch(`https://www.youtube.com/feeds/videos.xml?channel_id=${channelId}`);
-  const text = await rss.text();
-  return [...text.matchAll(/<entry>([\s\S]*?)<\/entry>/g)].slice(0, 30).flatMap(e => {
-    const idM = e[1].match(/<yt:videoId>([^<]+)<\/yt:videoId>/);
-    const titleM = e[1].match(/<title>([^<]+)<\/title>/);
-    const pubM = e[1].match(/<published>([^<]+)<\/published>/);
-    if (!idM || !titleM) return [];
-    return [{ video_id: idM[1], title: titleM[1].replace(/&amp;/g, "&").replace(/&quot;/g, '"'), url: `https://www.youtube.com/watch?v=${idM[1]}`, published_at: pubM?.[1] ?? new Date().toISOString(), channel_name: channelName }];
+// YouTube Data API v3 - 키워드 검색 (최근 7일)
+async function searchYouTubeAPI(keyword: string, apiKey: string): Promise<YTVideo[]> {
+  const publishedAfter = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+  const url = `https://www.googleapis.com/youtube/v3/search?part=snippet&q=${encodeURIComponent(keyword)}&type=video&order=date&publishedAfter=${publishedAfter}&maxResults=10&regionCode=KR&relevanceLanguage=ko&key=${apiKey}`;
+  const res = await fetch(url, { signal: AbortSignal.timeout(10000) });
+  const data = await res.json();
+  if (!data.items) return [];
+  return data.items.map((item: Record<string, unknown>) => {
+    const snippet = item.snippet as Record<string, unknown>;
+    const id = (item.id as Record<string, unknown>).videoId as string;
+    return {
+      video_id: id,
+      title: snippet.title as string,
+      url: `https://www.youtube.com/watch?v=${id}`,
+      published_at: snippet.publishedAt as string,
+      channel_name: snippet.channelTitle as string,
+      description: (snippet.description as string) || "",
+    };
   });
 }
 
-function chunkTranscript(segments: { text: string; offset: number; duration: number }[]) {
-  const chunks: { text: string; start_time: number; end_time: number }[] = [];
-  const est = (t: string) => Math.ceil(t.length / 2);
-  let cur: typeof segments = [], curTokens = 0;
-  for (const seg of segments) {
-    cur.push(seg); curTokens += est(seg.text);
-    if (curTokens >= 1000) {
-      chunks.push({ text: cur.map(s => s.text).join(" "), start_time: cur[0].offset, end_time: cur[cur.length - 1].offset + cur[cur.length - 1].duration });
-      let oc = 0; const overlap: typeof segments = [];
-      for (let i = cur.length - 1; i >= 0; i--) { oc += est(cur[i].text); overlap.unshift(cur[i]); if (oc >= 150) break; }
-      cur = overlap; curTokens = cur.reduce((s, x) => s + est(x.text), 0);
-    }
-  }
-  if (cur.length) chunks.push({ text: cur.map(s => s.text).join(" "), start_time: cur[0].offset, end_time: cur[cur.length - 1].offset + cur[cur.length - 1].duration });
-  return chunks;
+// YouTube Data API v3 - 채널별 최신 영상
+async function fetchChannelVideosAPI(channelId: string, channelName: string, apiKey: string): Promise<YTVideo[]> {
+  const publishedAfter = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+  const url = `https://www.googleapis.com/youtube/v3/search?part=snippet&channelId=${channelId}&type=video&order=date&publishedAfter=${publishedAfter}&maxResults=10&key=${apiKey}`;
+  const res = await fetch(url, { signal: AbortSignal.timeout(10000) });
+  const data = await res.json();
+  if (!data.items) return [];
+  return data.items.map((item: Record<string, unknown>) => {
+    const snippet = item.snippet as Record<string, unknown>;
+    const id = (item.id as Record<string, unknown>).videoId as string;
+    return {
+      video_id: id,
+      title: snippet.title as string,
+      url: `https://www.youtube.com/watch?v=${id}`,
+      published_at: snippet.publishedAt as string,
+      channel_name: channelName,
+      description: (snippet.description as string) || "",
+    };
+  });
 }
+
+// 슈카월드 채널 ID
+const CHANNEL_IDS: { id: string; name: string }[] = [
+  { id: "UCEDkO7wsjMFkuHm-jFyLMHQ", name: "슈카월드" },
+  { id: "UCHlGCLNnHXc4KOjEBnQn4AQ", name: "한국경제TV" },
+];
 
 // 뉴스/공시를 video 레코드처럼 저장 (기존 RAG 파이프라인 재활용)
 async function storeTextAsChunks(
@@ -321,35 +285,58 @@ async function generateIssueSummary(
 }
 
 async function processVideo(
-  video: { video_id: string; title: string; url: string; published_at: string; channel_name: string },
+  video: YTVideo,
   openai: OpenAI,
   supabase: ReturnType<typeof getSupabase>
 ): Promise<"done" | "no_transcript" | "failed"> {
+  // 자막 시도 (실패하면 제목+설명으로 fallback)
+  let contentText = "";
   try {
     const raw = await YoutubeTranscript.fetchTranscript(video.video_id, { lang: "ko" }).catch(() =>
       YoutubeTranscript.fetchTranscript(video.video_id)
     );
-    const segments = raw.map((s: { text: string; offset: number; duration: number }) => ({
-      text: s.text, offset: s.offset / 1000, duration: s.duration / 1000,
-    }));
-    if (!segments.length) {
-      await supabase.from("videos").upsert({ ...video, duration: 0, transcript_status: "no_transcript" }, { onConflict: "video_id" });
-      return "no_transcript";
+    if (raw.length > 0) {
+      contentText = raw.map((s: { text: string }) => s.text).join(" ");
     }
-    await supabase.from("videos").upsert({ ...video, duration: 0, transcript_status: "processing" }, { onConflict: "video_id" });
-    const chunks = chunkTranscript(segments);
+  } catch { /* 자막 없음 → 설명으로 대체 */ }
+
+  // 자막 없으면 제목 + 설명 사용
+  if (!contentText && video.description) {
+    contentText = `[영상 제목] ${video.title}\n\n[영상 설명]\n${video.description}`;
+  }
+
+  if (!contentText) {
+    await supabase.from("videos").upsert(
+      { ...video, duration: 0, transcript_status: "no_transcript" },
+      { onConflict: "video_id" }
+    );
+    return "no_transcript";
+  }
+
+  try {
+    await supabase.from("videos").upsert(
+      { ...video, duration: 0, transcript_status: "processing" },
+      { onConflict: "video_id" }
+    );
+    const chunks: { text: string; start: number }[] = [];
+    for (let i = 0; i < contentText.length; i += 1800) {
+      chunks.push({ text: contentText.slice(i, i + 1800), start: i });
+    }
     for (let i = 0; i < chunks.length; i += 20) {
       const batch = chunks.slice(i, i + 20);
       const embRes = await openai.embeddings.create({ model: "text-embedding-3-small", input: batch.map(c => c.text) });
       void logUsage("embedding", "text-embedding-3-small", embRes.usage?.total_tokens ?? 0, 0);
-      const rows = batch.map((c, j) => ({ video_id: video.video_id, chunk_index: i + j, chunk_text: c.text, start_time: c.start_time, end_time: c.end_time, embedding: JSON.stringify(embRes.data[j].embedding) }));
+      const rows = batch.map((c, j) => ({
+        video_id: video.video_id, chunk_index: i + j, chunk_text: c.text,
+        start_time: c.start, end_time: c.start + c.text.length,
+        embedding: JSON.stringify(embRes.data[j].embedding),
+      }));
       await supabase.from("transcript_chunks").upsert(rows, { onConflict: "video_id,chunk_index" });
     }
     await supabase.from("videos").update({ transcript_status: "done" }).eq("video_id", video.video_id);
     return "done";
   } catch {
-    await supabase.from("videos").upsert({ ...video, duration: 0, transcript_status: "no_transcript" }, { onConflict: "video_id" });
-    return "no_transcript";
+    return "failed";
   }
 }
 
@@ -368,6 +355,7 @@ export async function GET(req: NextRequest) {
   const openaiKey = await getSetting("openai_api_key");
   if (!openaiKey) return NextResponse.json({ error: "OpenAI API key not configured" }, { status: 503 });
   const openai = new OpenAI({ apiKey: openaiKey });
+  const youtubeApiKey = process.env.YOUTUBE_API_KEY;
 
   // 14일 경과 데이터 삭제
   const cutoff = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000).toISOString();
@@ -378,16 +366,18 @@ export async function GET(req: NextRequest) {
     await supabase.from("videos").delete().in("video_id", ids);
   }
 
-  // 영상 수집 (종목 키워드 + 채널)
-  let allVideos: { video_id: string; title: string; url: string; published_at: string; channel_name: string }[] = [];
+  // 영상 수집 (YouTube Data API v3 사용, 없으면 스킵)
+  let allVideos: YTVideo[] = [];
 
-  for (const kw of DEFAULT_KEYWORDS) {
-    const videos = await searchYouTube(kw).catch(() => []);
-    allVideos.push(...videos);
-  }
-  for (const ch of DEFAULT_CHANNELS) {
-    const videos = await fetchChannelVideos(ch.handle, ch.name).catch(() => []);
-    allVideos.push(...videos);
+  if (youtubeApiKey) {
+    for (const kw of DEFAULT_KEYWORDS) {
+      const videos = await searchYouTubeAPI(kw, youtubeApiKey).catch(() => []);
+      allVideos.push(...videos);
+    }
+    for (const ch of CHANNEL_IDS) {
+      const videos = await fetchChannelVideosAPI(ch.id, ch.name, youtubeApiKey).catch(() => []);
+      allVideos.push(...videos);
+    }
   }
 
   // 중복 제거
